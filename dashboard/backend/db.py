@@ -1,9 +1,8 @@
 """
 SQLite persistence for per-tick metrics.
-Needed by Phase 7 benchmark analysis.
 """
 import json
-import aiosqlite
+import sqlite3
 import os
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "runs.db")
@@ -17,29 +16,29 @@ CREATE TABLE IF NOT EXISTS metric_snapshots (
 );
 """
 
-_db: aiosqlite.Connection = None
+_db: sqlite3.Connection = None
 
 
-async def init_db():
+def init_db():
     global _db
-    _db = await aiosqlite.connect(DB_PATH)
-    await _db.execute(CREATE_TABLE)
-    await _db.commit()
+    _db = sqlite3.connect(DB_PATH, check_same_thread=False)
+    _db.execute(CREATE_TABLE)
+    _db.commit()
 
 
-async def persist_snapshot(snapshot: dict):
+def persist_snapshot(snapshot: dict):
     if _db is None:
         return
     tick = snapshot.get("tick", -1)
     blob = json.dumps(snapshot, default=str)
     import time
-    await _db.execute(
+    _db.execute(
         "INSERT INTO metric_snapshots (tick, snapshot, recorded_at) VALUES (?, ?, ?)",
         (tick, blob, time.time())
     )
-    await _db.commit()
+    _db.commit()
 
 
-async def close_db():
+def close_db():
     if _db:
-        await _db.close()
+        _db.close()

@@ -12,6 +12,11 @@ import os
 import threading
 import time
 
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+
+from sim.simulator import Simulator
+from experiments.runner import SCENARIOS
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -24,9 +29,12 @@ app = FastAPI(title="AMR Dashboard API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_methods=["GET"],   # read-only — no POST/PUT/DELETE from dashboard
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
+
+RUNNING = True
+LIVE_SCENARIO = "S1_Normal"
 
 # Shared telemetry bus — injected by the simulation process on startup
 _bus: TelemetryBus = TelemetryBus()
@@ -44,21 +52,48 @@ def inject_bus(bus: TelemetryBus):
     _bus = bus
 
 
+def live_simulation_loop(bus):
+    global LIVE_SCENARIO
+    while RUNNING:
+        current_scen = LIVE_SCENARIO
+        sim = Simulator(ascii_map=SCENARIOS[current_scen], headless=True, telemetry_bus=bus, strategy="P1")
+        
+        for tick in range(300):
+            if not RUNNING or current_scen != LIVE_SCENARIO: 
+                break
+                
+            # Apply scenario-specific events
+            if current_scen == "S4_Blocked" and tick == 50:
+                sim.block_cell(5, 2)
+            elif current_scen == "S5_Failure" and tick == 80:
+                sim.kill_robot("robot-0")
+                
+            sim.tick()
+            time.sleep(0.2)  # much slower and smoother (5 fps backend + CSS tweening)
+        time.sleep(2)
+
+
 @app.on_event("startup")
 async def _on_startup():
-    await init_db()
+    init_db()
     # Background task: drain telemetry bus → update latest snapshot + persist
     asyncio.create_task(_drain_bus())
+    # Start the continuous live simulation loop for the UI map
+    threading.Thread(target=live_simulation_loop, args=(_bus,), daemon=True).start()
 
+@app.on_event("shutdown")
+async def _on_shutdown():
+    global RUNNING
+    RUNNING = False
 
 async def _drain_bus():
-    while True:
+    while RUNNING:
         snap = await _bus.subscribe(timeout=0.1)
         if snap is not None:
             with _snapshot_lock:
                 global _latest_snapshot
                 _latest_snapshot = snap
-            await persist_snapshot(snap)
+            persist_snapshot(snap)
 
 
 @app.get("/snapshot")
@@ -79,6 +114,8 @@ async def trigger_benchmark(request: dict = None):
     scenario = "S1_Normal"
     if request and "scenario" in request:
         scenario = request["scenario"]
+        global LIVE_SCENARIO
+        LIVE_SCENARIO = scenario
         
     tasks = []
     for strategy in ["B0", "B1", "B2", "P1"]:
@@ -88,11 +125,12 @@ async def trigger_benchmark(request: dict = None):
     # For a true asynchronous execution, this should be in a task queue,
     # but for this demo endpoint we will run it directly and return the results.
     # We modify MAX_TICKS for speed
+    import concurrent.futures
     import experiments.runner
     experiments.runner.MAX_TICKS = 100
     
-    with multiprocessing.Pool() as pool:
-        results = pool.map(run_trial, tasks)
+    with concurrent.futures.ProcessPoolExecutor() as executor:
+        results = list(executor.map(run_trial, tasks))
         
     # Group results by strategy
     summary = {}

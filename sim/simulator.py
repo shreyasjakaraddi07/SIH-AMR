@@ -48,7 +48,11 @@ class Simulator:
         self.telemetry_bus = telemetry_bus   # Phase 5 — write-only publish, never reads back
         self.strategy = strategy
 
-        self.pickup_cells = self.grid_map.find_all('P')
+        self.pickup_cells = []
+        for x, y in self.grid_map.find_all('#'):
+            # Only add racks that are adjacent to an aisle
+            if any(self.grid_map.get_cell(x+dx, y+dy) == '.' for dx, dy in [(0,1), (1,0), (0,-1), (-1,0)]):
+                self.pickup_cells.append((x, y))
         self.dropoff_cells = self.grid_map.find_all('D')
         self.spawn_cells   = self.grid_map.find_all('R')
         self.free_cells    = self.grid_map.find_all('.')
@@ -81,6 +85,10 @@ class Simulator:
         # Heartbeat tracker: robot_id -> last heartbeat tick
         self.last_heartbeat: Dict[str, float] = {}
 
+        # Shared global reservation table to enable Prioritized Planning
+        from robot.coordination import ReservationTable
+        self.global_reservation_table = ReservationTable()
+
         # Spawn robots at R markers
         num_robots = len(self.spawn_cells) if self.spawn_cells else 3
         for i in range(num_robots):
@@ -97,6 +105,11 @@ class Simulator:
                 status=RobotStatus.IDLE
             )
             manager = LocalTaskManager(state, self.planner, self.comms, self.grid_map, strategy=self.strategy)
+            
+            # OVERRIDE the local table with the global one so robots instantly see each other's paths
+            # during sequential allocation, solving the simultaneous-planning collision bug.
+            manager.reservation_table = self.global_reservation_table
+            
             self.robot_managers.append(manager)
             self.last_heartbeat[state.robot_id] = 0.0
 
@@ -312,6 +325,7 @@ class Simulator:
             "conflicts": self.event_log.conflict_events[-20:],
             "deadlocks": self.event_log.deadlock_events[-10:],
             "metrics": dict(self.metric_values),
+            "grid": self.grid_map.grid if self.grid_map else [],
         }
 
     # -------------------------------------------------------------------------

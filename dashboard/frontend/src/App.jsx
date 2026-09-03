@@ -55,7 +55,12 @@ function App() {
     }
   };
 
-  if (!data) return <div>Connecting to Telemetry...</div>;
+  const safeData = data && Object.keys(data).length > 0 ? data : {
+    robots: [],
+    tasks: [],
+    metrics: {},
+    conflicts: []
+  };
 
   return (
     <div className="dashboard">
@@ -72,15 +77,15 @@ function App() {
 
       <div className="main-grid">
         <div className="col map-col">
-          <WarehouseMap robots={data.robots} tasks={data.tasks} />
+          <WarehouseMap robots={safeData.robots} tasks={safeData.tasks} grid={safeData.grid} />
         </div>
         
         <div className="col side-col">
           <BenchmarkPanel />
-          <MetricsPanel metrics={data.metrics} />
-          <TasksPanel tasks={data.tasks} />
-          <RobotsPanel robots={data.robots} />
-          <ConflictsPanel conflicts={data.conflicts} />
+          <MetricsPanel metrics={safeData.metrics} />
+          <TasksPanel tasks={safeData.tasks} />
+          <RobotsPanel robots={safeData.robots} />
+          <ConflictsPanel conflicts={safeData.conflicts} />
           <SecurityPanel alerts={securityAlerts} />
         </div>
       </div>
@@ -155,38 +160,103 @@ function BenchmarkPanel() {
   );
 }
 
-function WarehouseMap({ robots, tasks }) {
-  const mapW = 10;
-  const mapH = 10; // we scale accordingly
+function WarehouseMap({ robots, tasks, grid }) {
   const CELL = 40;
 
-  // Simple placeholder rendering. In a real app we'd fetch the static map from backend too.
+  if (!grid || grid.length === 0) {
+    return (
+      <div className="panel map-panel" style={{display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%'}}>
+        <div style={{color: '#888'}}>Waiting for map data...</div>
+      </div>
+    );
+  }
+
+  const mapH = grid.length;
+  const mapW = grid[0].length;
+  const width = mapW * CELL;
+  const height = mapH * CELL;
+
   return (
-    <div className="panel map-panel">
+    <div className="panel map-panel" style={{overflow: 'hidden', display: 'flex', flexDirection: 'column'}}>
       <h2>Live Map</h2>
-      <svg width={400} height={400} className="grid-svg">
-        {/* Draw robots */}
-        {robots.map(r => {
-          const cx = r.position[0] * CELL + CELL/2;
-          const cy = r.position[1] * CELL + CELL/2;
-          return (
-            <g key={r.robot_id}>
-              {/* Path */}
-              {r.planned_path && r.planned_path.length > 0 && (
-                <polyline 
-                  points={[[r.position[0]*CELL+CELL/2, r.position[1]*CELL+CELL/2], ...r.planned_path.map(p => [p[0]*CELL+CELL/2, p[1]*CELL+CELL/2])].map(p=>p.join(',')).join(' ')} 
-                  fill="none" 
-                  stroke="rgba(100, 200, 255, 0.4)" 
-                  strokeWidth="2" 
-                />
-              )}
-              {/* Robot body */}
-              <circle cx={cx} cy={cy} r={12} fill={r.status === 'WAITING' ? '#ffaa00' : '#44bbff'} />
-              <text x={cx} y={cy+4} fontSize="10" textAnchor="middle" fill="#fff">{r.robot_id.split('-')[1]}</text>
-            </g>
-          );
-        })}
-      </svg>
+      <div style={{flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
+        <svg viewBox={`0 0 ${width} ${height}`} className="grid-svg" style={{maxHeight: '100%', maxWidth: '100%'}}>
+          
+          {/* Draw the warehouse grid cells */}
+          {grid.map((row, y) => (
+            row.map((cell, x) => {
+              const isRack = cell === '#';
+              const isPickup = cell === 'P';
+              const isDropoff = cell === 'D';
+              
+              // Warehouse colors
+              const fill = isRack ? '#2a2a35' : (isPickup ? '#0a2a1a' : (isDropoff ? '#0a1a3a' : '#141419'));
+              const stroke = isRack ? '#3a3a4a' : '#1f1f26';
+              
+              return (
+                <g key={`${x}-${y}`}>
+                  <rect x={x*CELL} y={y*CELL} width={CELL} height={CELL} fill={fill} stroke={stroke} strokeWidth="1" />
+                  {isRack && <rect x={x*CELL+4} y={y*CELL+4} width={CELL-8} height={CELL-8} fill="#333344" rx="2" />}
+                  
+                  {isPickup && (
+                    <>
+                      <rect x={x*CELL+4} y={y*CELL+4} width={CELL-8} height={CELL-8} fill="#0a2a1a" stroke="#00ff88" strokeWidth="2" rx="2" strokeDasharray="4 2" />
+                      <text x={x*CELL+CELL/2} y={y*CELL+CELL/2+5} fontSize="16" textAnchor="middle" fill="#00ff88" fontWeight="bold">P</text>
+                    </>
+                  )}
+                  
+                  {isDropoff && (
+                    <>
+                      <rect x={x*CELL+4} y={y*CELL+4} width={CELL-8} height={CELL-8} fill="#0a1a3a" stroke="#00e5ff" strokeWidth="2" rx="2" strokeDasharray="4 2" />
+                      <text x={x*CELL+CELL/2} y={y*CELL+CELL/2+5} fontSize="16" textAnchor="middle" fill="#00e5ff" fontWeight="bold">D</text>
+                    </>
+                  )}
+                </g>
+              );
+            })
+          ))}
+
+          {/* Draw Paths (underneath robots) */}
+          {robots.map(r => {
+            if (!r.planned_path || r.planned_path.length === 0) return null;
+            const pts = [[r.position[0]*CELL+CELL/2, r.position[1]*CELL+CELL/2], ...r.planned_path.map(p => [p[0]*CELL+CELL/2, p[1]*CELL+CELL/2])];
+            return (
+              <polyline 
+                key={`path-${r.robot_id}`}
+                points={pts.map(p => p.join(',')).join(' ')} 
+                fill="none" 
+                stroke="rgba(0, 229, 255, 0.3)" 
+                strokeWidth="3" 
+                strokeDasharray="4 4"
+              />
+            );
+          })}
+
+          {/* Draw Robot Bodies with smooth transitions */}
+          {robots.map(r => {
+            const cx = r.position[0] * CELL + CELL/2;
+            const cy = r.position[1] * CELL + CELL/2;
+            const isWaiting = r.status === 'WAITING';
+            const isOffline = r.status === 'OFFLINE';
+            const color = isOffline ? '#555' : (isWaiting ? '#ffaa00' : '#00e5ff');
+            
+            return (
+              <g key={r.robot_id} style={{ transition: 'transform 0.2s linear', transform: `translate(${cx}px, ${cy}px)` }}>
+                {/* Outer Glow */}
+                <circle r={16} fill={color} opacity="0.15" />
+                {/* AMR Chassis */}
+                <rect x={-12} y={-12} width={24} height={24} fill="#1a1a20" stroke={color} strokeWidth="2" rx="4" />
+                {/* Center indicator */}
+                <circle r={3} fill={color} />
+                {/* Label */}
+                <text y={4} fontSize="10" textAnchor="middle" fill="#ffffff" fontWeight="bold" style={{textShadow: '0 1px 2px #000'}}>
+                  {r.robot_id.split('-')[1]}
+                </text>
+              </g>
+            );
+          })}
+        </svg>
+      </div>
     </div>
   );
 }

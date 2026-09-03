@@ -35,7 +35,14 @@ class LocalTaskManager:
 
     def _replan(self):
         if self.target_cell:
-            path = self.planner.plan(self.state.position, self.target_cell, self.costmap)
+            path = self.planner.plan(
+                start=self.state.position, 
+                goal=self.target_cell, 
+                costmap=self.costmap,
+                reservation_table=self.reservation_table,
+                start_time=self.state.timestamp,
+                robot_id=self.state.robot_id
+            )
             current_int = (int(self.state.position[0]), int(self.state.position[1]))
             if path and path[0] == current_int:
                 path.pop(0)
@@ -135,7 +142,16 @@ class LocalTaskManager:
                     self.wait_time += 1.0
                     return False
                 else:
-                    # I have higher priority, proceed (other should yield)
+                    # I have higher priority, but can the other robot actually move?
+                    # If it's IDLE or WAITING physically in the cell we want, it can't yield.
+                    px, py = peer_msg.position
+                    if int(px) == next_cell[0] and int(py) == next_cell[1]:
+                        if peer_msg.intent == Intent.WAIT or not peer_msg.planned_path:
+                            # We must wait, it can't get out of our way!
+                            self.state.status = RobotStatus.WAITING
+                            self.wait_time += 1.0
+                            return False
+                    # Otherwise proceed (other should yield)
                     pass
             else:
                 # Peer unknown, play safe
@@ -173,17 +189,23 @@ class LocalTaskManager:
                 
         # Broadcast intent
         self.seq += 1
+        
+        broadcast_path = self.state.planned_path.copy()
+        if self.state.status in (RobotStatus.WAITING, RobotStatus.IDLE):
+            curr_pos = (int(self.state.position[0]), int(self.state.position[1]))
+            broadcast_path = [curr_pos] * 200 + broadcast_path
+
         msg = IntentMessage(
             robot_id=self.state.robot_id,
             seq=self.seq,
             timestamp=current_time,
             position=self.state.position,
             velocity=1.0 if self.state.status == RobotStatus.MOVING else 0.0,
-            intent=Intent.MOVE if self.state.status == RobotStatus.MOVING else Intent.WAIT,
+            intent=Intent.WAIT if self.state.status in (RobotStatus.WAITING, RobotStatus.IDLE) else Intent.MOVE,
             next_intersection=None,
             task_id=self.state.current_task_id,
             priority=self.state.task_priority,
-            planned_path=self.state.planned_path.copy(),
+            planned_path=broadcast_path,
             waiting_on=self.waiting_on,
             heartbeat=current_time
         )
@@ -194,10 +216,22 @@ class LocalTaskManager:
             return
             
         current_int = (int(self.state.position[0]), int(self.state.position[1]))
-        if current_int == self.current_task.pickup_cell and self.current_task.status == TaskStatus.ASSIGNED:
-            self.current_task.status = TaskStatus.IN_PROGRESS
-            self.target_cell = self.current_task.dropoff_cell
-            self._replan()
+        
+        if self.current_task.status == TaskStatus.ASSIGNED:
+            px, py = self.current_task.pickup_cell
+            dist = abs(current_int[0] - px) + abs(current_int[1] - py)
+            
+            arrived = False
+            if dist == 0:
+                arrived = True
+            elif dist == 1 and self.costmap.get_cell(px, py) == '#':
+                arrived = True
+                
+            if arrived:
+                self.current_task.status = TaskStatus.IN_PROGRESS
+                self.target_cell = self.current_task.dropoff_cell
+                self._replan()
+                
         elif current_int == self.current_task.dropoff_cell and self.current_task.status == TaskStatus.IN_PROGRESS:
             self.current_task.status = TaskStatus.COMPLETED
             self.state.status = RobotStatus.IDLE

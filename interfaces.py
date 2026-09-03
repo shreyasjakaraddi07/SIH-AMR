@@ -11,7 +11,7 @@ from models import RobotState, Task, IntentMessage
 
 class Planner(ABC):
     @abstractmethod
-    def plan(self, start: Tuple[int, int], goal: Tuple[int, int], costmap: Any) -> List[Tuple[int, int]]:
+    def plan(self, start: Tuple[int, int], goal: Tuple[int, int], costmap: Any, reservation_table: Optional[Any] = None, start_time: float = 0.0, robot_id: str = "") -> List[Tuple[int, int]]:
         """Plan a path from start to goal given a costmap."""
         pass
 
