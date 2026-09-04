@@ -72,7 +72,7 @@ class AStarPlanner(Planner):
                                 
                 new_cost = cost_so_far.get((current, t), 0) + 1.0
                 if dx == 0 and dy == 0:
-                    new_cost += 0.1  # Slight penalty for waiting
+                    new_cost += 0.5  # Penalise waiting in-place: prefer detour over temporal stall
                 
                 if (nxt, nxt_t) not in cost_so_far or new_cost < cost_so_far[(nxt, nxt_t)]:
                     cost_so_far[(nxt, nxt_t)] = new_cost

@@ -35,6 +35,7 @@ app.add_middleware(
 
 RUNNING = True
 LIVE_SCENARIO = "S1_Normal"
+SIM_TICK_RATE = 0.8  # Slower, realistic pace (~1.25 ticks/sec)
 
 # Shared telemetry bus — injected by the simulation process on startup
 _bus: TelemetryBus = TelemetryBus()
@@ -69,7 +70,7 @@ def live_simulation_loop(bus):
                 sim.kill_robot("robot-0")
                 
             sim.tick()
-            time.sleep(0.2)  # much slower and smoother (5 fps backend + CSS tweening)
+            time.sleep(SIM_TICK_RATE)  # Smooth, observable pace
         time.sleep(2)
 
 
@@ -80,6 +81,15 @@ async def _on_startup():
     asyncio.create_task(_drain_bus())
     # Start the continuous live simulation loop for the UI map
     threading.Thread(target=live_simulation_loop, args=(_bus,), daemon=True).start()
+
+
+@app.post("/api/speed")
+async def set_speed(request: dict):
+    """Adjusts live simulation tick rate (seconds per tick)."""
+    global SIM_TICK_RATE
+    if request and "rate" in request:
+        SIM_TICK_RATE = max(0.2, min(3.0, float(request["rate"])))
+    return {"rate": SIM_TICK_RATE}
 
 @app.on_event("shutdown")
 async def _on_shutdown():

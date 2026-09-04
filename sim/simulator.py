@@ -12,14 +12,16 @@ from models import RobotState, Task, RobotStatus, TaskStatus
 from allocator.task_generator import TaskGenerator
 from allocator.hungarian import HungarianAllocator
 from robot.planner import AStarPlanner
+from robot.cbs import CBSPlanner, ObstacleCostmap
 from robot.task_manager import LocalTaskManager
 from robot.coordination import detect_deadlock, PriorityCalculator
 from comms.channel import PubSubChannel
 import metrics
 
-HEARTBEAT_TIMEOUT = 10   # ticks without a heartbeat before robot is OFFLINE
-DEADLOCK_THRESHOLD = 8   # ticks a robot may WAIT before deadlock check triggers
-REALLOC_INTERVAL = 5     # allocator runs every N ticks
+HEARTBEAT_TIMEOUT   = 10  # ticks without a heartbeat before robot is OFFLINE
+DEADLOCK_THRESHOLD  = 4   # ticks a robot may WAIT before deadlock check triggers
+REALLOC_INTERVAL    = 5   # allocator runs every N ticks
+CBS_REPLAN_INTERVAL = 12  # rolling-horizon CBS replan every N ticks (keeps paths fresh)
 
 
 class EventLog:
@@ -65,6 +67,8 @@ class Simulator:
         self.allocator = HungarianAllocator(planner=self.planner, costmap=self.grid_map)
         self.event_log = EventLog()
         self.priority_calc = PriorityCalculator()
+        # CBS coordinator — used when strategy == "P1"
+        self.cbs_planner = CBSPlanner()
 
         self.robot_managers: List[LocalTaskManager] = []
         self.tasks: List[Task] = []
@@ -101,7 +105,7 @@ class Simulator:
                 velocity=0.0,
                 battery=100.0,
                 current_task_id=None,
-                task_priority=0,
+                task_priority=i + 1,  # unique base priority per robot — prevents priority ties
                 status=RobotStatus.IDLE
             )
             manager = LocalTaskManager(state, self.planner, self.comms, self.grid_map, strategy=self.strategy, event_logger=self.event_log)
@@ -109,6 +113,10 @@ class Simulator:
             # OVERRIDE the local table with the global one so robots instantly see each other's paths
             # during sequential allocation, solving the simultaneous-planning collision bug.
             manager.reservation_table = self.global_reservation_table
+
+            # Enable CBS mode for P1 strategy — CBS is the sole path authority
+            if self.strategy == "P1":
+                manager.cbs_mode = True
             
             self.robot_managers.append(manager)
             self.last_heartbeat[state.robot_id] = 0.0
@@ -181,27 +189,48 @@ class Simulator:
                 wait_graph[m.state.robot_id] = m.waiting_on
                 wait_times[m.state.robot_id] = m.wait_time
 
-        # Only trigger for robots waiting longer than threshold
+        # --- Cycle detection: break the deadlock cycle ---
         long_waiters = {r for r, wt in wait_times.items() if wt >= DEADLOCK_THRESHOLD}
-        if not long_waiters:
-            return
+        if long_waiters:
+            cycle = detect_deadlock(wait_graph)
+            if cycle:
+                self.metric_values[metrics.DEADLOCK_COUNT] += 1
 
-        cycle = detect_deadlock(wait_graph)
-        if cycle:
-            self.metric_values[metrics.DEADLOCK_COUNT] += 1
-            # Pick highest-priority robot in cycle to force reroute
-            def pri(rid):
-                m = next((x for x in self.robot_managers if x.state.robot_id == rid), None)
-                if m:
-                    return m.get_priority()
-                return (0.0, rid)
+                # The lowest-priority robot should reroute: it has the least
+                # claim on right-of-way and choosing it minimises disruption
+                # to the higher-priority robots in the cycle.
+                def pri(rid):
+                    m = next((x for x in self.robot_managers if x.state.robot_id == rid), None)
+                    if m:
+                        return m.get_priority()
+                    return (0.0, rid)
 
-            breaker = max(cycle, key=pri)
-            m = next(x for x in self.robot_managers if x.state.robot_id == breaker)
-            m.force_reroute()
-            self.metric_values[metrics.REPLAN_COUNT] += 1
-            self.event_log.log_deadlock_break(cycle, breaker, self.tick_count)
-            self.event_log.log_conflict(breaker, cycle[0] if cycle else "CYCLE", "DEADLOCK_BREAK", "REROUTE", self.tick_count)
+                breaker = min(cycle, key=pri)   # lowest priority yields
+                m = next(x for x in self.robot_managers if x.state.robot_id == breaker)
+                m.force_reroute()
+                self.metric_values[metrics.REPLAN_COUNT] += 1
+                self.event_log.log_deadlock_break(cycle, breaker, self.tick_count)
+                self.event_log.log_conflict(
+                    breaker, cycle[0] if len(cycle) > 1 else breaker,
+                    "DEADLOCK_BREAK", "REROUTE", self.tick_count)
+                # CBS replan for all active robots after breaking the deadlock
+                if self.strategy == "P1":
+                    self._run_cbs_planning()
+
+        # --- Secondary sweep: force-replan stalled robots not in any cycle ---
+        stalled_any = False
+        for m in self.robot_managers:
+            if (m.state.status == RobotStatus.WAITING and
+                    m.wait_time >= DEADLOCK_THRESHOLD * 2 and
+                    m.state.robot_id not in wait_graph):
+                m.force_reroute()
+                stalled_any = True
+                self.event_log.log_conflict(
+                    m.state.robot_id, m.waiting_on or "NONE",
+                    "STALL_REPLAN", "FORCE_REROUTE", self.tick_count)
+        if stalled_any and self.strategy == "P1":
+            self._run_cbs_planning()
+
 
     def _check_collisions(self):
         """Count vertex collisions for metrics (robots should not share cells after Phase 3)."""
@@ -223,10 +252,71 @@ class Simulator:
         if not eligible or not queueable:
             return
         assignments = self.allocator.allocate(eligible, queueable)
+        newly_assigned = []
         for robot_id, task_id in assignments.items():
             manager = next(m for m in self.robot_managers if m.state.robot_id == robot_id)
             task = next(t for t in self.tasks if t.task_id == task_id)
             manager.assign_task(task)
+            newly_assigned.append(robot_id)
+        # After new assignments, replan all active robots with CBS so new
+        # robots don't conflict with robots already on their way.
+        if newly_assigned and self.strategy == "P1":
+            self._run_cbs_planning()
+
+    def _run_cbs_planning(self):
+        """
+        Run CBS for all active robots and inject collision-free paths.
+
+        Collects every robot that has a goal (pickup or dropoff), calls
+        CBSPlanner.plan(), and feeds each resulting path back via inject_path().
+        Only runs when strategy == 'P1' and CBS mode is active.
+
+        Robots without a goal (IDLE, OFFLINE) are excluded.
+        """
+        goals     = {}
+        positions = {}
+        starts    = {}
+
+        for m in self.robot_managers:
+            if m.state.status in (RobotStatus.OFFLINE, RobotStatus.IDLE):
+                continue
+            goal = m.get_current_goal()
+            if goal is None:
+                continue
+            rid = m.state.robot_id
+            goals[rid]     = goal
+            positions[rid] = m.state.position
+            starts[rid]    = self.state_timestamp(m)
+
+        if not goals:
+            return
+
+        # Idle / offline robots are static obstacles — wrap the costmap so CBS
+        # treats their cells as walls (O(1) per get_cell, zero constraint overhead).
+        idle_cells = [
+            m.state.position
+            for m in self.robot_managers
+            if m.state.status in (RobotStatus.IDLE, RobotStatus.OFFLINE)
+        ]
+        planning_map = (
+            ObstacleCostmap(self.grid_map, idle_cells) if idle_cells else self.grid_map
+        )
+
+        paths = self.cbs_planner.plan(goals, positions, planning_map, starts)
+
+        injected = 0
+        for m in self.robot_managers:
+            rid = m.state.robot_id
+            if rid in paths and paths[rid]:
+                goal = goals[rid]
+                m.inject_path(paths[rid], goal)
+                injected += 1
+        if injected:
+            self.metric_values[metrics.REPLAN_COUNT] += 1  # count CBS runs, not individual paths
+
+    def state_timestamp(self, manager: "LocalTaskManager") -> float:
+        """Helper: returns the current simulation time for path planning start."""
+        return float(self.tick_count)
 
     # -------------------------------------------------------------------------
     # Main loop
@@ -264,6 +354,15 @@ class Simulator:
 
         for m in self.robot_managers:
             m.tick(t)
+
+        # 3b. CBS checkpoint check + rolling-horizon replan
+        if self.strategy == "P1":
+            checkpoint_triggered = any(m.checkpoint_reached for m in self.robot_managers)
+            rolling_replan       = (self.tick_count % CBS_REPLAN_INTERVAL == 0)
+            if checkpoint_triggered or rolling_replan:
+                for m in self.robot_managers:
+                    m.checkpoint_reached = False
+                self._run_cbs_planning()
 
         # 4. Read heartbeats from comms channel
         for msg in self.comms.receive():

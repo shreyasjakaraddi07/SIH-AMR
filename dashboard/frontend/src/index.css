@@ -1,42 +1,33 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Share+Tech+Mono&display=swap');
 
 :root {
-  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  --font-mono: 'JetBrains Mono', monospace;
+  --font-mono: 'JetBrains Mono', 'Share Tech Mono', 'Consolas', monospace;
 
-  /* Color Palette - Cyber Industrial Theme */
-  --bg-darkest: #07090e;
-  --bg-dark: #0c0f17;
-  --bg-panel: #111520;
-  --bg-card: #161b2a;
-  --bg-card-hover: #1c2336;
-  --bg-glass: rgba(17, 21, 32, 0.75);
+  /* Rugged Low-Level 2000s Simulation Palette (Gazebo / RViz / Player-Stage) */
+  --sim-bg: #141619;
+  --sim-surface: #1b1e23;
+  --sim-panel: #20242b;
+  --sim-card: #252a33;
+  --sim-card-hover: #2d333e;
 
-  --border-subtle: rgba(255, 255, 255, 0.07);
-  --border-glow: rgba(0, 240, 255, 0.25);
-  --border-focus: #00f0ff;
+  --sim-border: #383e4a;
+  --sim-border-light: #4a5263;
+  --sim-border-dark: #0e1012;
 
-  --text-primary: #f0f4fc;
-  --text-secondary: #94a3b8;
-  --text-muted: #64748b;
+  --sim-text: #d8dde6;
+  --sim-text-dim: #8b95a5;
+  --sim-text-dark: #5c6473;
 
-  --neon-cyan: #00f0ff;
-  --neon-green: #00ff9d;
-  --neon-amber: #ffb800;
-  --neon-red: #ff3366;
-  --neon-purple: #a855f7;
-  --neon-blue: #3b82f6;
+  /* Industrial Accent Colors (Matte, High-Contrast, Functional) */
+  --mona-orange: #ff8c00;
+  --mona-orange-dark: #d97706;
+  --sim-green: #22c55e;
+  --sim-red: #ef4444;
+  --sim-yellow: #eab308;
+  --sim-blue: #38bdf8;
+  --sim-cyan: #06b6d4;
 
-  --shadow-panel: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
-  --shadow-glow-cyan: 0 0 15px rgba(0, 240, 255, 0.35);
-  --shadow-glow-green: 0 0 15px rgba(0, 255, 157, 0.35);
-  --shadow-glow-amber: 0 0 15px rgba(255, 184, 0, 0.35);
-  --shadow-glow-red: 0 0 15px rgba(255, 51, 102, 0.35);
-
-  --radius-sm: 4px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  --radius-full: 9999px;
+  --radius-sharp: 2px;
 }
 
 * {
@@ -49,11 +40,11 @@ html, body {
   width: 100%;
   height: 100%;
   overflow: hidden;
-  background-color: var(--bg-darkest);
-  color: var(--text-primary);
-  font-family: var(--font-sans);
-  font-size: 14px;
-  line-height: 1.5;
+  background-color: var(--sim-bg);
+  color: var(--sim-text);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.4;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -68,21 +59,23 @@ html, body {
   overflow: hidden;
 }
 
-/* Custom Scrollbar */
+/* Rugged Technical Scrollbar */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 7px;
+  height: 7px;
 }
 
 ::-webkit-scrollbar-track {
-  background: var(--bg-dark);
+  background: #111316;
+  border-left: 1px solid var(--sim-border);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--border-subtle);
-  border-radius: var(--radius-full);
+  background: #3a414e;
+  border-radius: 0;
+  border: 1px solid #1e2229;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--neon-cyan);
+  background: var(--mona-orange);
 }

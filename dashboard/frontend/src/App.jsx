@@ -7,15 +7,29 @@ export default function App() {
   const [data, setData] = useState(null);
   const [connected, setConnected] = useState(false);
   const [securityAlerts, setSecurityAlerts] = useState([]);
-  const [hoveredRobot, setHoveredRobot] = useState(null);
   const [selectedScenario, setSelectedScenario] = useState('S1_Normal');
-  const [activeLayer, setActiveLayer] = useState({
+  const [activeRobotId, setActiveRobotId] = useState(null);
+  const [simRate, setSimRate] = useState(0.8);
+  const [toggles, setToggles] = useState({
     lidar: true,
     paths: true,
-    grid: true,
-    labels: true
+    ruler: true,
+    tags: true,
   });
   const wsRef = useRef(null);
+
+  const changeSpeed = async (rate) => {
+    setSimRate(rate);
+    try {
+      await fetch('http://localhost:8000/api/speed', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rate })
+      });
+    } catch (e) {
+      console.error("Failed to set speed:", e);
+    }
+  };
 
   const connectWs = () => {
     if (wsRef.current && wsRef.current.readyState <= 1) return;
@@ -26,9 +40,7 @@ export default function App() {
         setConnected(false);
         wsRef.current = null;
       };
-      ws.onerror = () => {
-        setConnected(false);
-      };
+      ws.onerror = () => setConnected(false);
       ws.onmessage = (e) => {
         try {
           const snap = JSON.parse(e.data);
@@ -39,7 +51,7 @@ export default function App() {
               if (r.status === 'DEGRADED') {
                 setSecurityAlerts((prev) => {
                   if (!prev.find((a) => a.id === r.robot_id)) {
-                    return [...prev, { id: r.robot_id, msg: `Robot ${r.robot_id} entered DEGRADED comms mode` }];
+                    return [...prev, { id: r.robot_id, msg: `[FDIR_ALERT] ${r.robot_id} entering degraded fallback` }];
                   }
                   return prev;
                 });
@@ -47,12 +59,12 @@ export default function App() {
             });
           }
         } catch (err) {
-          console.error("Failed to parse telemetry snapshot", err);
+          console.error("Snapshot error:", err);
         }
       };
       wsRef.current = ws;
     } catch (err) {
-      console.error("WebSocket connection error", err);
+      console.error("WS error:", err);
     }
   };
 
@@ -87,92 +99,110 @@ export default function App() {
 
   return (
     <div className="app-container">
-      {/* Top Industrial Header */}
+      {/* 2000s Industrial Workbench Simulation Control Bar */}
       <header className="app-header">
         <div className="header-brand">
-          <div className="brand-icon">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#07090e" strokeWidth="2.5">
-              <rect x="2" y="5" width="20" height="14" rx="3" />
-              <path d="M7 15h.01M17 15h.01M9 9h6" />
-            </svg>
-          </div>
+          <span className="brand-badge">MONA</span>
           <div className="brand-titles">
-            <h1>Decentralized AMR Warehouse Fleet</h1>
-            <div className="brand-subtitle">SPATIAL-TEMPORAL DIGITAL TWIN • SIMULATION ENGINE v2.6</div>
+            <h1>
+              <span>MONA_AMR_SIMULATOR</span>
+              <span style={{ fontSize: '0.7rem', color: 'var(--sim-text-dim)', fontWeight: 400 }}>[STAGE/GAZEBO_2D]</span>
+            </h1>
+            <div className="brand-subtitle">MODULAR OPEN NAVIGATING AMR • FDIR DISPATCH v2.6.4</div>
           </div>
         </div>
 
         <div className="header-meta">
-          <div className="meta-badge">
-            <span className="badge-label">SCENARIO:</span>
-            <span className="badge-val">{selectedScenario}</span>
+          <div className="meta-box">
+            <span className="meta-label">SCENARIO:</span>
+            <span className="meta-val">{selectedScenario}</span>
           </div>
 
-          <div className="meta-badge">
-            <span className="badge-label">SIM TICK:</span>
-            <span className="badge-val">#{safeData.tick || 0}</span>
+          <div className="meta-box">
+            <span className="meta-label">STEP:</span>
+            <span className="meta-val">T+{safeData.tick || 0}</span>
           </div>
 
-          <div className={`connection-pill ${connected ? 'online' : 'offline'}`}>
-            <span className="pulse-dot"></span>
-            <span>{connected ? 'LIVE TELEMETRY (10 Hz)' : 'TELEMETRY OFFLINE'}</span>
+          <div className={`connection-indicator ${connected ? 'online' : 'offline'}`}>
+            <span className="status-led"></span>
+            <span>{connected ? 'LINK_ACTIVE 10Hz' : 'LINK_DOWN'}</span>
           </div>
 
-          <div className="header-actions">
+          <div>
             {connected ? (
-              <button className="btn-cyber danger" onClick={killWs} title="Simulate communication kill">
-                Disconnect WS
+              <button className="btn-terminal danger" onClick={killWs}>
+                [KILL_COMM]
               </button>
             ) : (
-              <button className="btn-cyber" onClick={connectWs}>
-                Reconnect
+              <button className="btn-terminal" onClick={connectWs}>
+                [RECONNECT]
               </button>
             )}
           </div>
         </div>
       </header>
 
-      {/* Main Workspace Layout */}
+      {/* Main Simulation Viewport & Instrument Panels */}
       <main className="dashboard-body">
-        {/* Left Column: Live Simulation Map */}
+        {/* Left Column: 2D Simulation World */}
         <section className="map-view-container">
-          <div className="map-toolbar">
-            <div className="map-title-group">
-              <div className="map-title">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z" />
-                </svg>
-                Warehouse Grid Digital Twin
-              </div>
-              <span className="map-subtitle-badge">
-                {safeData.grid?.length ? `${safeData.grid[0]?.length} × ${safeData.grid.length} BAYS` : 'CALIBRATING'}
+          <div className="map-control-bar">
+            <div className="map-heading">
+              <span>// SIM_STAGE_WORLD</span>
+              <span style={{ color: 'var(--sim-text-dim)', fontSize: '0.7rem' }}>
+                {safeData.grid?.length ? `GRID: ${safeData.grid[0]?.length}x${safeData.grid.length}` : 'INITIALIZING'}
               </span>
             </div>
 
-            <div className="map-controls-group">
+            <div className="map-toggles">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', marginRight: '0.4rem', borderRight: '1px solid var(--sim-border)', paddingRight: '0.5rem' }}>
+                <span style={{ fontSize: '0.65rem', color: 'var(--sim-text-dim)' }}>SPEED:</span>
+                <button
+                  className={`toggle-btn ${simRate === 1.4 ? 'active' : ''}`}
+                  onClick={() => changeSpeed(1.4)}
+                  title="0.5x Slower pace (1.4s / step)"
+                >
+                  0.5x
+                </button>
+                <button
+                  className={`toggle-btn ${simRate === 0.8 ? 'active' : ''}`}
+                  onClick={() => changeSpeed(0.8)}
+                  title="1.0x Normal smooth pace (0.8s / step)"
+                >
+                  1.0x
+                </button>
+                <button
+                  className={`toggle-btn ${simRate === 0.4 ? 'active' : ''}`}
+                  onClick={() => changeSpeed(0.4)}
+                  title="2.0x Fast pace (0.4s / step)"
+                >
+                  2.0x
+                </button>
+              </div>
+
               <button
-                className={`toggle-chip ${activeLayer.lidar ? 'active' : ''}`}
-                onClick={() => setActiveLayer(prev => ({ ...prev, lidar: !prev.lidar }))}
+                className={`toggle-btn ${toggles.lidar ? 'active' : ''}`}
+                onClick={() => setToggles(prev => ({ ...prev, lidar: !prev.lidar }))}
               >
-                LiDAR Cone
+                [LIDAR_RAYS]
               </button>
               <button
-                className={`toggle-chip ${activeLayer.paths ? 'active' : ''}`}
-                onClick={() => setActiveLayer(prev => ({ ...prev, paths: !prev.paths }))}
+                className={`toggle-btn ${toggles.paths ? 'active' : ''}`}
+                onClick={() => setToggles(prev => ({ ...prev, paths: !prev.paths }))}
               >
-                Path Vectors
+                [PLANNED_PATH]
               </button>
               <button
-                className={`toggle-chip ${activeLayer.grid ? 'active' : ''}`}
-                onClick={() => setActiveLayer(prev => ({ ...prev, grid: !prev.grid }))}
+                className={`toggle-btn ${toggles.ruler ? 'active' : ''}`}
+                onClick={() => setToggles(prev => ({ ...prev, ruler: !prev.ruler }))}
               >
-                Fiducial Grid
+                [AXIS_RULER]
               </button>
               <button
-                className={`toggle-chip ${activeLayer.labels ? 'active' : ''}`}
-                onClick={() => setActiveLayer(prev => ({ ...prev, labels: !prev.labels }))}
+                className={`toggle-btn ${toggles.tags ? 'active' : ''}`}
+                onClick={() => setToggles(prev => ({ ...prev, tags: !prev.tags }))}
               >
-                Rack Tags
+                [CELL_TAGS]
               </button>
             </div>
           </div>
@@ -181,18 +211,24 @@ export default function App() {
             robots={safeData.robots}
             tasks={safeData.tasks}
             grid={safeData.grid}
-            layers={activeLayer}
-            hoveredRobot={hoveredRobot}
-            setHoveredRobot={setHoveredRobot}
+            toggles={toggles}
+            simRate={simRate}
+            activeRobotId={activeRobotId}
+            setActiveRobotId={setActiveRobotId}
           />
+
+          <div className="map-status-strip">
+            <span>COORDINATE_FRAME: /map | ODOMETRY: DIFF_DRIVE | RESOLUTION: 1.0m/CELL</span>
+            <span>AMRS_ACTIVE: {safeData.robots?.length || 0} | CARGO_IN_TRANSIT: {safeData.tasks?.filter(t => t.status === 'IN_PROGRESS' || t.status === 3).length || 0}</span>
+          </div>
         </section>
 
-        {/* Right Column: Analytics & Fleet Telemetry */}
+        {/* Right Column: Low-Level Telemetry & Diagnostics */}
         <aside className="sidebar-container">
           <BenchmarkPanel scenario={selectedScenario} setScenario={setSelectedScenario} />
           <MetricsPanel metrics={safeData.metrics} />
           <TasksPanel tasks={safeData.tasks} />
-          <RobotsPanel robots={safeData.robots} hoveredRobot={hoveredRobot} setHoveredRobot={setHoveredRobot} />
+          <RobotsPanel robots={safeData.robots} activeRobotId={activeRobotId} setActiveRobotId={setActiveRobotId} />
           <ConflictsPanel conflicts={safeData.conflicts} />
           <SecurityPanel alerts={securityAlerts} />
         </aside>
@@ -202,20 +238,16 @@ export default function App() {
 }
 
 /* --------------------------------------------------------------------------
-   WAREHOUSE SIMULATION MAP (HIGH-FIDELITY DIGITAL TWIN)
+   GAZEBO / PLAYER-STAGE 2D SIMULATION MAP
    -------------------------------------------------------------------------- */
-function WarehouseMap({ robots = [], tasks = [], grid = [], layers, hoveredRobot, setHoveredRobot }) {
-  const CELL = 44; // Cell size in SVG units
+function WarehouseMap({ robots = [], tasks = [], grid = [], toggles, simRate = 0.8, activeRobotId, setActiveRobotId }) {
+  const CELL = 42; // Simulation cell scale
 
   if (!grid || grid.length === 0) {
     return (
       <div className="map-viewport">
-        <div className="empty-state">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <circle cx="12" cy="12" r="10" />
-            <path d="M12 6v6l4 2" />
-          </svg>
-          Initializing simulation grid telemetry...
+        <div style={{ color: 'var(--sim-text-dim)', fontSize: '0.8rem' }}>
+          [STAGE] Waiting for warehouse world map...
         </div>
       </div>
     );
@@ -226,8 +258,8 @@ function WarehouseMap({ robots = [], tasks = [], grid = [], layers, hoveredRobot
   const width = mapW * CELL;
   const height = mapH * CELL;
 
-  // Selected robot details for tooltip
-  const activeRobotObj = hoveredRobot ? robots.find(r => r.robot_id === hoveredRobot) : null;
+  // Selected robot object for OSD
+  const selectedRobot = activeRobotId ? robots.find(r => r.robot_id === activeRobotId) : (robots[0] || null);
 
   return (
     <div className="map-viewport">
@@ -237,58 +269,63 @@ function WarehouseMap({ robots = [], tasks = [], grid = [], layers, hoveredRobot
         preserveAspectRatio="xMidYMid meet"
       >
         <defs>
-          {/* Laser Grid Background Pattern */}
-          <pattern id="floor-grid" width={CELL} height={CELL} patternUnits="userSpaceOnUse">
-            <rect width={CELL} height={CELL} fill="#0a0d17" stroke="#121727" strokeWidth="1" />
-            {layers.grid && (
-              <>
-                <circle cx={CELL / 2} cy={CELL / 2} r="1.5" fill="rgba(0, 240, 255, 0.25)" />
-                <path d={`M ${CELL / 2 - 4} ${CELL / 2} L ${CELL / 2 + 4} ${CELL / 2} M ${CELL / 2} ${CELL / 2 - 4} L ${CELL / 2} ${CELL / 2 + 4}`} stroke="rgba(255,255,255,0.06)" strokeWidth="1" />
-              </>
-            )}
+          {/* Engineering 1m Grid Pattern */}
+          <pattern id="cad-grid" width={CELL} height={CELL} patternUnits="userSpaceOnUse">
+            <rect width={CELL} height={CELL} fill="#14171c" stroke="#21252e" strokeWidth="1" />
+            <circle cx={CELL / 2} cy={CELL / 2} r="1" fill="#383e4a" />
           </pattern>
 
-          {/* Diagonal Hazard Stripes for Blocked Aisles */}
-          <pattern id="hazard-stripes" width="12" height="12" patternTransform="rotate(45 0 0)" patternUnits="userSpaceOnUse">
-            <line x1="0" y1="0" x2="0" y2="12" stroke="#ffb800" strokeWidth="6" />
-            <line x1="6" y1="0" x2="6" y2="12" stroke="#1c1917" strokeWidth="6" />
+          {/* Yellow/Black Safety Caution Stripes for Bays */}
+          <pattern id="caution-stripes" width="10" height="10" patternTransform="rotate(45 0 0)" patternUnits="userSpaceOnUse">
+            <line x1="0" y1="0" x2="0" y2="10" stroke="#eab308" strokeWidth="5" />
+            <line x1="5" y1="0" x2="5" y2="10" stroke="#1c1917" strokeWidth="5" />
           </pattern>
 
-          {/* Racks Gradient & Textures */}
-          <linearGradient id="rack-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stopColor="#1e2538" />
-            <stop offset="100%" stopColor="#141926" />
-          </linearGradient>
-
-          {/* Pickup Zone Gradient */}
-          <linearGradient id="pickup-glow" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stopColor="rgba(0, 255, 157, 0.18)" />
-            <stop offset="100%" stopColor="rgba(0, 255, 157, 0.04)" />
-          </linearGradient>
-
-          {/* Dropoff Zone Gradient */}
-          <linearGradient id="dropoff-glow" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stopColor="rgba(0, 240, 255, 0.18)" />
-            <stop offset="100%" stopColor="rgba(0, 240, 255, 0.04)" />
-          </linearGradient>
-
-          {/* Forward LiDAR Laser Scan Gradient */}
-          <radialGradient id="lidar-cone" cx="50%" cy="100%" r="90%">
-            <stop offset="0%" stopColor="rgba(0, 240, 255, 0.45)" />
-            <stop offset="40%" stopColor="rgba(0, 240, 255, 0.2)" />
-            <stop offset="100%" stopColor="rgba(0, 240, 255, 0)" />
-          </radialGradient>
-
-          {/* AMR Shadow */}
-          <filter id="amr-shadow" x="-50%" y="-50%" width="200%" height="200%">
-            <feDropShadow dx="0" dy="4" stdDeviation="5" floodColor="#000000" floodOpacity="0.75" />
-          </filter>
+          {/* Solid Hazard Striping for Dynamic Obstacles */}
+          <pattern id="obstacle-stripes" width="8" height="8" patternTransform="rotate(-45 0 0)" patternUnits="userSpaceOnUse">
+            <line x1="0" y1="0" x2="0" y2="8" stroke="#ef4444" strokeWidth="4" />
+            <line x1="4" y1="0" x2="4" y2="8" stroke="#18181b" strokeWidth="4" />
+          </pattern>
         </defs>
 
-        {/* 1. Base High-Tech Epoxy Warehouse Floor */}
-        <rect x="0" y="0" width={width} height={height} fill="url(#floor-grid)" />
+        {/* 1. Base Simulation Floor */}
+        <rect x="0" y="0" width={width} height={height} fill="url(#cad-grid)" />
 
-        {/* 2. Warehouse Infrastructure: Racks, Docks, Induction Stations */}
+        {/* 2. Grid Axis Coordinate Ticks & Rulers */}
+        {toggles.ruler && (
+          <g>
+            {/* Horizontal Column Numbers */}
+            {grid[0].map((_, x) => (
+              <text
+                key={`ruler-x-${x}`}
+                x={x * CELL + CELL / 2}
+                y={9}
+                fontSize="7"
+                fontFamily="JetBrains Mono"
+                fill="#4a5263"
+                textAnchor="middle"
+              >
+                {x}
+              </text>
+            ))}
+            {/* Vertical Row Numbers */}
+            {grid.map((_, y) => (
+              <text
+                key={`ruler-y-${y}`}
+                x={3}
+                y={y * CELL + CELL / 2 + 2}
+                fontSize="7"
+                fontFamily="JetBrains Mono"
+                fill="#4a5263"
+                textAnchor="start"
+              >
+                {y}
+              </text>
+            ))}
+          </g>
+        )}
+
+        {/* 3. Static Warehouse Environment: Storage Racks, Pickups, Dropoffs */}
         {grid.map((row, y) =>
           row.map((cell, x) => {
             const isRack = cell === '#';
@@ -298,51 +335,38 @@ function WarehouseMap({ robots = [], tasks = [], grid = [], layers, hoveredRobot
             const cy = y * CELL;
 
             if (isRack) {
-              // Industrial Pallet Rack
-              // Deterministic box colors based on coordinates
-              const boxColor1 = ((x + y) % 3 === 0) ? '#ca8a04' : (((x + y) % 3 === 1) ? '#2563eb' : '#a28564');
-              const boxColor2 = ((x * y) % 2 === 0) ? '#0284c7' : '#94a3b8';
-
               return (
                 <g key={`rack-${x}-${y}`}>
-                  {/* Rack Bay Base Frame */}
+                  {/* Heavy Solid Shelving Bay */}
                   <rect
-                    x={cx + 2}
-                    y={cy + 2}
-                    width={CELL - 4}
-                    height={CELL - 4}
-                    rx="3"
-                    fill="url(#rack-gradient)"
-                    stroke="#2e3852"
+                    x={cx + 1}
+                    y={cy + 1}
+                    width={CELL - 2}
+                    height={CELL - 2}
+                    fill="#23262f"
+                    stroke="#3f4554"
                     strokeWidth="1.5"
                   />
-                  {/* Shelving Crossbeams */}
-                  <line x1={cx + 4} y1={cy + CELL / 2} x2={cx + CELL - 4} y2={cy + CELL / 2} stroke="#3b4866" strokeWidth="1" />
-                  <line x1={cx + CELL / 2} y1={cy + 4} x2={cx + CELL / 2} y2={cy + CELL - 4} stroke="#3b4866" strokeWidth="1" strokeDasharray="2 2" />
+                  {/* Diagonal Structural Steel Cross Bracing */}
+                  <line x1={cx + 2} y1={cy + 2} x2={cx + CELL - 2} y2={cy + CELL - 2} stroke="#2e333e" strokeWidth="1" />
+                  <line x1={cx + CELL - 2} y1={cy + 2} x2={cx + 2} y2={cy + CELL - 2} stroke="#2e333e" strokeWidth="1" />
 
-                  {/* Stored Cargo Pallet Totes */}
-                  <rect x={cx + 5} y={cy + 5} width={CELL / 2 - 7} height={CELL / 2 - 7} rx="2" fill={boxColor1} opacity="0.85" />
-                  <rect x={cx + CELL / 2 + 2} y={cy + 5} width={CELL / 2 - 7} height={CELL / 2 - 7} rx="2" fill={boxColor2} opacity="0.85" />
-                  <rect x={cx + 5} y={cy + CELL / 2 + 2} width={CELL - 10} height={CELL / 2 - 7} rx="2" fill="#334155" opacity="0.9" />
+                  {/* Stored Industrial Timber Pallet & Boxes */}
+                  <rect x={cx + 4} y={cy + 4} width={CELL / 2 - 5} height={CELL - 8} fill="#8d6e63" stroke="#5d4037" strokeWidth="1" />
+                  <rect x={cx + CELL / 2 + 1} y={cy + 4} width={CELL / 2 - 5} height={CELL - 8} fill="#455a64" stroke="#263238" strokeWidth="1" />
 
-                  {/* Rack Corner Steel Uprights */}
-                  <circle cx={cx + 4} cy={cy + 4} r="1.5" fill="#64748b" />
-                  <circle cx={cx + CELL - 4} cy={cy + 4} r="1.5" fill="#64748b" />
-                  <circle cx={cx + 4} cy={cy + CELL - 4} r="1.5" fill="#64748b" />
-                  <circle cx={cx + CELL - 4} cy={cy + CELL - 4} r="1.5" fill="#64748b" />
-
-                  {/* Technical Rack Coordinate Label */}
-                  {layers.labels && (
+                  {/* Stencil Coordinates */}
+                  {toggles.tags && (
                     <text
                       x={cx + CELL / 2}
                       y={cy + CELL / 2 + 3}
                       fontSize="7"
                       fontFamily="JetBrains Mono"
-                      fontWeight="600"
-                      fill="rgba(255,255,255,0.4)"
+                      fontWeight="bold"
+                      fill="#ffffff"
                       textAnchor="middle"
                     >
-                      R{x},{y}
+                      {x},{y}
                     </text>
                   )}
                 </g>
@@ -350,7 +374,6 @@ function WarehouseMap({ robots = [], tasks = [], grid = [], layers, hoveredRobot
             }
 
             if (isPickup) {
-              // Automated Inbound Conveyor Induction Bay
               return (
                 <g key={`pickup-${x}-${y}`}>
                   <rect
@@ -358,35 +381,30 @@ function WarehouseMap({ robots = [], tasks = [], grid = [], layers, hoveredRobot
                     y={cy + 2}
                     width={CELL - 4}
                     height={CELL - 4}
-                    rx="4"
-                    fill="url(#pickup-glow)"
-                    stroke="#00ff9d"
+                    fill="#15261d"
+                    stroke="#15803d"
                     strokeWidth="1.5"
-                    strokeDasharray="4 2"
                   />
-                  {/* Conveyor Rollers */}
-                  <line x1={cx + 7} y1={cy + 10} x2={cx + CELL - 7} y2={cy + 10} stroke="#00ff9d" strokeWidth="1.5" opacity="0.6" />
-                  <line x1={cx + 7} y1={cy + 18} x2={cx + CELL - 7} y2={cy + 18} stroke="#00ff9d" strokeWidth="1.5" opacity="0.6" />
-                  <line x1={cx + 7} y1={cy + 26} x2={cx + CELL - 7} y2={cy + 26} stroke="#00ff9d" strokeWidth="1.5" opacity="0.6" />
-                  <line x1={cx + 7} y1={cy + 34} x2={cx + CELL - 7} y2={cy + 34} stroke="#00ff9d" strokeWidth="1.5" opacity="0.6" />
+                  {/* Perimeter Warning Tape */}
+                  <rect x={cx + 2} y={cy + 2} width={CELL - 4} height={4} fill="url(#caution-stripes)" />
+                  <rect x={cx + 2} y={cy + CELL - 6} width={CELL - 4} height={4} fill="url(#caution-stripes)" />
+
                   <text
                     x={cx + CELL / 2}
                     y={cy + CELL / 2 + 4}
-                    fontSize="11"
-                    fontFamily="Inter"
+                    fontSize="9"
+                    fontFamily="JetBrains Mono"
                     fontWeight="800"
-                    fill="#00ff9d"
+                    fill="#22c55e"
                     textAnchor="middle"
-                    style={{ textShadow: '0 0 10px rgba(0,255,157,0.7)' }}
                   >
-                    IN
+                    PK-01
                   </text>
                 </g>
               );
             }
 
             if (isDropoff) {
-              // Automated Outbound Dock Station
               return (
                 <g key={`dropoff-${x}-${y}`}>
                   <rect
@@ -394,31 +412,24 @@ function WarehouseMap({ robots = [], tasks = [], grid = [], layers, hoveredRobot
                     y={cy + 2}
                     width={CELL - 4}
                     height={CELL - 4}
-                    rx="4"
-                    fill="url(#dropoff-glow)"
-                    stroke="#00f0ff"
+                    fill="#10232e"
+                    stroke="#0284c7"
                     strokeWidth="1.5"
-                    strokeDasharray="4 2"
                   />
-                  {/* Docking Guides */}
-                  <polygon
-                    points={`${cx + 8},${cy + 8} ${cx + CELL - 8},${cy + 8} ${cx + CELL / 2},${cy + CELL - 8}`}
-                    fill="rgba(0, 240, 255, 0.12)"
-                    stroke="#00f0ff"
-                    strokeWidth="1"
-                    opacity="0.7"
-                  />
+                  {/* Perimeter Warning Tape */}
+                  <rect x={cx + 2} y={cy + 2} width={CELL - 4} height={4} fill="url(#caution-stripes)" />
+                  <rect x={cx + 2} y={cy + CELL - 6} width={CELL - 4} height={4} fill="url(#caution-stripes)" />
+
                   <text
                     x={cx + CELL / 2}
                     y={cy + CELL / 2 + 4}
-                    fontSize="11"
-                    fontFamily="Inter"
+                    fontSize="9"
+                    fontFamily="JetBrains Mono"
                     fontWeight="800"
-                    fill="#00f0ff"
+                    fill="#38bdf8"
                     textAnchor="middle"
-                    style={{ textShadow: '0 0 10px rgba(0,240,255,0.7)' }}
                   >
-                    OUT
+                    DP-01
                   </text>
                 </g>
               );
@@ -428,154 +439,166 @@ function WarehouseMap({ robots = [], tasks = [], grid = [], layers, hoveredRobot
           })
         )}
 
-        {/* 3. Laser Waypoint Trajectories (Underneath AMRs) */}
-        {layers.paths && robots.map((r) => {
+        {/* 4. Planned Waypoint Trajectories (Nav2 / A* Plan) */}
+        {toggles.paths && robots.map((r) => {
           if (!r.planned_path || r.planned_path.length === 0) return null;
           const currentPos = [r.position[0] * CELL + CELL / 2, r.position[1] * CELL + CELL / 2];
-          const points = [currentPos, ...r.planned_path.map(p => [p[0] * CELL + CELL / 2, p[1] * CELL + CELL / 2])];
+          const pts = [currentPos, ...r.planned_path.map(p => [p[0] * CELL + CELL / 2, p[1] * CELL + CELL / 2])];
           const isWaiting = r.status === 'WAITING';
-          const strokeColor = isWaiting ? 'rgba(255, 184, 0, 0.65)' : 'rgba(0, 240, 255, 0.65)';
+          const pathColor = isWaiting ? '#eab308' : '#22c55e';
 
           return (
-            <g key={`trajectory-${r.robot_id}`}>
-              {/* Pulsing Trajectory Line */}
+            <g key={`nav2-path-${r.robot_id}`}>
+              {/* Discrete Waypoint Polyline */}
               <polyline
-                points={points.map(p => p.join(',')).join(' ')}
+                points={pts.map(p => p.join(',')).join(' ')}
                 fill="none"
-                stroke={strokeColor}
-                strokeWidth="2.5"
-                strokeDasharray="6 4"
-                strokeLinecap="round"
+                stroke={pathColor}
+                strokeWidth="1.5"
+                strokeDasharray="4 2"
               />
-              {/* Target Goal Holographic Marker */}
+              {/* Waypoint Nodes */}
+              {r.planned_path.map((p, idx) => (
+                <rect
+                  key={`node-${r.robot_id}-${idx}`}
+                  x={p[0] * CELL + CELL / 2 - 2}
+                  y={p[1] * CELL + CELL / 2 - 2}
+                  width="4"
+                  height="4"
+                  fill={pathColor}
+                />
+              ))}
+              {/* Target Goal Cell Box */}
               {r.planned_path.length > 0 && (
-                <g transform={`translate(${r.planned_path[r.planned_path.length - 1][0] * CELL + CELL / 2}, ${r.planned_path[r.planned_path.length - 1][1] * CELL + CELL / 2})`}>
-                  <circle r="9" fill="none" stroke={strokeColor} strokeWidth="1.5" strokeDasharray="3 2" />
-                  <circle r="3" fill={strokeColor} />
-                </g>
+                <rect
+                  x={r.planned_path[r.planned_path.length - 1][0] * CELL + 3}
+                  y={r.planned_path[r.planned_path.length - 1][1] * CELL + 3}
+                  width={CELL - 6}
+                  height={CELL - 6}
+                  fill="none"
+                  stroke={pathColor}
+                  strokeWidth="1.5"
+                  strokeDasharray="3 2"
+                />
               )}
             </g>
           );
         })}
 
-        {/* 4. Realistic AMR Autonomous Mobile Robot Fleet */}
+        {/* 5. MONA Robots (Accurate to vladubase/mona_robot URDF Spec) */}
         {robots.map((r) => {
           const cx = r.position[0] * CELL + CELL / 2;
           const cy = r.position[1] * CELL + CELL / 2;
-          const heading = r.heading || 0; // Directional heading in degrees
+          const heading = r.heading || 0;
           const isWaiting = r.status === 'WAITING';
           const isOffline = r.status === 'OFFLINE';
           const isDegraded = r.status === 'DEGRADED';
           const hasCargo = r.has_cargo || false;
+          const isSelected = activeRobotId === r.robot_id;
 
-          let statusColor = '#00f0ff'; // Cyan = Nominal Moving
-          if (isOffline) statusColor = '#64748b';
-          else if (isDegraded) statusColor = '#ff3366';
-          else if (isWaiting) statusColor = '#ffb800';
-          else if (r.status === 'IDLE') statusColor = '#94a3b8';
-
-          const isHovered = hoveredRobot === r.robot_id;
+          // Industrial MONA Palette
+          const chassisColor = isOffline ? '#475569' : (isDegraded ? '#dc2626' : (isWaiting ? '#ca8a04' : '#ff8c00'));
 
           return (
             <g
               key={r.robot_id}
               style={{
-                cursor: 'pointer',
-                transition: 'transform 0.22s cubic-bezier(0.25, 1, 0.5, 1)'
+                transform: `translate(${cx}px, ${cy}px)`,
+                transition: `transform ${simRate}s linear`,
+                cursor: 'pointer'
               }}
-              transform={`translate(${cx}, ${cy})`}
-              onMouseEnter={() => setHoveredRobot(r.robot_id)}
-              onMouseLeave={() => setHoveredRobot(null)}
+              onClick={() => setActiveRobotId(r.robot_id)}
             >
-              {/* Forward LiDAR Safety Optical Field (Rotates with robot heading) */}
-              {layers.lidar && !isOffline && (
-                <g transform={`rotate(${heading})`}>
-                  <path
-                    d={`M 0 0 L -24 -46 A 50 50 0 0 1 24 -46 Z`}
-                    fill="url(#lidar-cone)"
-                    opacity={isWaiting ? "0.35" : "0.75"}
-                  />
-                  {/* Laser Arc Boundary */}
-                  <path
-                    d={`M -24 -46 A 50 50 0 0 1 24 -46`}
-                    fill="none"
-                    stroke={statusColor}
-                    strokeWidth="1.2"
-                    strokeDasharray="3 2"
-                    opacity="0.8"
-                  />
+              {/* 2D Planar LiDAR Laser Scan Rays (RViz LaserScan Simulation) */}
+              {toggles.lidar && !isOffline && (
+                <g transform={`rotate(${heading})`} style={{ transition: 'transform 0.35s ease-in-out' }}>
+                  {/* Multiple planar laser beams fanning out */}
+                  {[-45, -30, -15, 0, 15, 30, 45].map((angle, i) => {
+                    const rayLen = isWaiting ? 26 : 42;
+                    const rad = (angle - 90) * (Math.PI / 180);
+                    const rx = Math.cos(rad) * rayLen;
+                    const ry = Math.sin(rad) * rayLen;
+                    return (
+                      <g key={`scan-ray-${i}`}>
+                        <line
+                          x1="0"
+                          y1="-8"
+                          x2={rx}
+                          y2={ry}
+                          stroke="#ef4444"
+                          strokeWidth="1"
+                          strokeOpacity="0.75"
+                          strokeDasharray="3 1"
+                        />
+                        {/* Laser Hit Point */}
+                        <circle cx={rx} cy={ry} r="1.5" fill="#ef4444" />
+                      </g>
+                    );
+                  })}
                 </g>
               )}
 
-              {/* Status Ambient Aura / Underglow */}
-              <circle
-                r={isHovered ? 24 : 19}
-                fill={statusColor}
-                opacity={isWaiting ? "0.35" : "0.2"}
-              />
+              {/* MONA Chassis (Rotates to Heading) */}
+              <g transform={`rotate(${heading})`} style={{ transition: 'transform 0.35s ease-in-out' }}>
+                {/* Left & Right Differential Drive Rubber Wheels with Hubs */}
+                <rect x="-17" y="-9" width="4" height="18" fill="#090a0f" stroke="#27272a" strokeWidth="1" />
+                <rect x="13" y="-9" width="4" height="18" fill="#090a0f" stroke="#27272a" strokeWidth="1" />
 
-              {/* AMR Chassis Body (Rotates with heading) */}
-              <g transform={`rotate(${heading})`} filter="url(#amr-shadow)">
-                {/* Left & Right Drive Wheel Pods */}
-                <rect x="-18" y="-10" width="4" height="20" rx="2" fill="#0f172a" stroke="#334155" strokeWidth="1" />
-                <rect x="14" y="-10" width="4" height="20" rx="2" fill="#0f172a" stroke="#334155" strokeWidth="1" />
+                {/* Front & Rear Swivel Casters */}
+                <circle cx="0" cy="-13" r="2" fill="#18181b" stroke="#3f3f46" strokeWidth="1" />
+                <circle cx="0" cy="13" r="2" fill="#18181b" stroke="#3f3f46" strokeWidth="1" />
 
-                {/* Omni Caster Bumpers (Front/Back) */}
-                <circle cx="0" cy="-14" r="2.5" fill="#334155" />
-                <circle cx="0" cy="14" r="2.5" fill="#334155" />
-
-                {/* Heavy-Duty AGV Chassis Shell */}
+                {/* Main Differential Drive Chassis (1.25m x 0.8m ratio from mona.urdf.xacro) */}
                 <rect
-                  x="-14"
+                  x="-13"
                   y="-15"
-                  width="28"
+                  width="26"
                   height="30"
-                  rx="6"
-                  fill="#111827"
-                  stroke={statusColor}
-                  strokeWidth={isHovered ? "2.5" : "1.8"}
+                  fill={chassisColor}
+                  stroke="#000000"
+                  strokeWidth="1.5"
                 />
 
-                {/* Top Deck Sensor Module */}
-                <circle cx="0" cy="0" r="8" fill="#1f2937" stroke="#374151" strokeWidth="1" />
-                <circle cx="0" cy="0" r="4" fill={statusColor} />
+                {/* Dark Steel Front Bumper & Safety Lip */}
+                <rect x="-13" y="-15" width="26" height="5" fill="#18181b" stroke="#27272a" strokeWidth="1" />
 
-                {/* Directional Front Indicator Arrow */}
-                <polygon points="0,-12 -4,-7 4,-7" fill={statusColor} />
+                {/* Central LiDAR Sensor Puck (Hokuyo / SICK planar scanner) */}
+                <circle cx="0" cy="-5" r="5" fill="#09090b" stroke="#27272a" strokeWidth="1" />
+                <circle cx="0" cy="-5" r="2" fill="#ef4444" />
 
-                {/* Cargo Payload Box (Rendered on top of chassis when carrying task goods) */}
+                {/* Direction of Motion Arrow */}
+                <polygon points="0,-14 -3,-9 3,-9" fill="#ffffff" />
+
+                {/* Cargo Pallet Payload on Back Deck */}
                 {hasCargo && (
-                  <g>
-                    <rect x="-9" y="-8" width="18" height="16" rx="2" fill="#f97316" stroke="#c2410c" strokeWidth="1" />
-                    {/* Cargo Tie-down Straps */}
-                    <line x1="-9" y1="0" x2="9" y2="0" stroke="#7c2d12" strokeWidth="1.2" />
-                    <line x1="0" y1="-8" x2="0" y2="8" stroke="#7c2d12" strokeWidth="1.2" />
+                  <g transform="translate(0, 5)">
+                    <rect x="-10" y="-5" width="20" height="11" fill="#78350f" stroke="#451a03" strokeWidth="1" />
+                    <rect x="-8" y="-4" width="16" height="9" fill="#d97706" stroke="#b45309" strokeWidth="0.8" />
                   </g>
                 )}
               </g>
 
-              {/* Robot Index Callout Badge (Always upright, does not rotate) */}
-              <g transform="translate(0, 21)">
+              {/* Identification Callout Tag (Always Upright) */}
+              <g transform="translate(0, 20)">
                 <rect
                   x="-16"
-                  y="-7"
+                  y="-6"
                   width="32"
-                  height="13"
-                  rx="3"
-                  fill="#07090e"
-                  stroke={statusColor}
+                  height="12"
+                  fill="#000000"
+                  stroke={isSelected ? '#22c55e' : '#52525b'}
                   strokeWidth="1"
                 />
                 <text
                   x="0"
-                  y="2.5"
-                  fontSize="8.5"
+                  y="3"
+                  fontSize="7.5"
                   fontFamily="JetBrains Mono"
-                  fontWeight="700"
-                  fill="#ffffff"
+                  fontWeight="bold"
+                  fill={isSelected ? '#22c55e' : '#ffffff'}
                   textAnchor="middle"
                 >
-                  {r.robot_id.replace('robot-', 'AMR-')}
+                  {r.robot_id.replace('robot-', 'AMR')}
                 </text>
               </g>
             </g>
@@ -583,78 +606,48 @@ function WarehouseMap({ robots = [], tasks = [], grid = [], layers, hoveredRobot
         })}
       </svg>
 
-      {/* Floating Telemetry Tooltip on Hover */}
-      {activeRobotObj && (
-        <div className="robot-tooltip">
-          <div className="tooltip-header">
-            <span>{activeRobotObj.robot_id.toUpperCase()}</span>
-            <span style={{ fontSize: '0.7rem', color: '#94a3b8' }}>{activeRobotObj.status}</span>
+      {/* Low-Level OSD Telemetry Box (HUD) */}
+      {selectedRobot && (
+        <div className="diag-overlay">
+          <div className="diag-line" style={{ borderBottom: '1px solid var(--sim-border)', paddingBottom: '0.2rem' }}>
+            <span className="label">NODE:</span>
+            <span className="val" style={{ color: 'var(--mona-orange)' }}>{selectedRobot.robot_id}</span>
+            <span style={{ color: 'var(--sim-text-dim)' }}>[{selectedRobot.status}]</span>
           </div>
-          <div className="tooltip-row">
-            <span className="tooltip-label">Coordinates:</span>
-            <span className="tooltip-val">[{activeRobotObj.position[0].toFixed(1)}, {activeRobotObj.position[1].toFixed(1)}]</span>
+          <div className="diag-line">
+            <span className="label">POSE [X,Y]:</span>
+            <span className="val">({selectedRobot.position[0].toFixed(2)}, {selectedRobot.position[1].toFixed(2)})</span>
           </div>
-          <div className="tooltip-row">
-            <span className="tooltip-label">Heading:</span>
-            <span className="tooltip-val">{(activeRobotObj.heading || 0).toFixed(0)}°</span>
+          <div className="diag-line">
+            <span className="label">THETA:</span>
+            <span className="val">{(selectedRobot.heading || 0).toFixed(1)} deg</span>
           </div>
-          <div className="tooltip-row">
-            <span className="tooltip-label">Battery:</span>
-            <span className="tooltip-val" style={{ color: activeRobotObj.battery > 30 ? '#00ff9d' : '#ff3366' }}>
-              {activeRobotObj.battery.toFixed(0)}%
+          <div className="diag-line">
+            <span className="label">BATTERY:</span>
+            <span className="val" style={{ color: selectedRobot.battery > 30 ? 'var(--sim-green)' : 'var(--sim-red)' }}>
+              {selectedRobot.battery.toFixed(0)}%
             </span>
           </div>
-          <div className="tooltip-row">
-            <span className="tooltip-label">Payload:</span>
-            <span className="tooltip-val" style={{ color: activeRobotObj.has_cargo ? '#f97316' : '#94a3b8' }}>
-              {activeRobotObj.has_cargo ? 'CARGO LOADED' : 'EMPTY'}
-            </span>
+          <div className="diag-line">
+            <span className="label">PAYLOAD:</span>
+            <span className="val">{selectedRobot.has_cargo ? 'PALLET_LOADED' : 'UNLOADED'}</span>
           </div>
-          {activeRobotObj.current_task_id && (
-            <div className="tooltip-row">
-              <span className="tooltip-label">Task:</span>
-              <span className="tooltip-val">{activeRobotObj.current_task_id.substring(0, 8)}...</span>
+          {selectedRobot.current_task_id && (
+            <div className="diag-line">
+              <span className="label">TASK_ID:</span>
+              <span className="val" style={{ fontSize: '0.65rem' }}>{selectedRobot.current_task_id.substring(0, 8)}</span>
             </div>
           )}
         </div>
       )}
-
-      {/* Visual Map Legend */}
-      <div className="map-legend-overlay">
-        <div className="legend-item">
-          <div className="legend-swatch" style={{ background: '#1e2538', border: '1px solid #3b4866' }}></div>
-          <span>Pallet Rack</span>
-        </div>
-        <div className="legend-item">
-          <div className="legend-swatch" style={{ background: 'rgba(0,255,157,0.3)', border: '1px solid #00ff9d' }}></div>
-          <span>Pickup (IN)</span>
-        </div>
-        <div className="legend-item">
-          <div className="legend-swatch" style={{ background: 'rgba(0,240,255,0.3)', border: '1px solid #00f0ff' }}></div>
-          <span>Dropoff (OUT)</span>
-        </div>
-        <div className="legend-item">
-          <div className="legend-dot" style={{ background: '#00f0ff' }}></div>
-          <span>Moving</span>
-        </div>
-        <div className="legend-item">
-          <div className="legend-dot" style={{ background: '#ffb800' }}></div>
-          <span>Waiting / Yield</span>
-        </div>
-        <div className="legend-item">
-          <div className="legend-swatch" style={{ background: '#f97316' }}></div>
-          <span>Carrying Cargo</span>
-        </div>
-      </div>
     </div>
   );
 }
 
 /* --------------------------------------------------------------------------
-   PERFORMANCE METRICS PANEL (FIXED & MODERNIZED)
+   PERFORMANCE METRICS PANEL (LOW-LEVEL INSTRUMENT GAUGES)
    -------------------------------------------------------------------------- */
 function MetricsPanel({ metrics = {} }) {
-  // Read both lowercase and uppercase keys for 100% reliability
   const makespan = metrics.makespan ?? metrics.MAKESPAN ?? 0;
   const throughput = metrics.throughput ?? metrics.THROUGHPUT ?? 0;
   const collisions = metrics.collision_count ?? metrics.COLLISION_COUNT ?? 0;
@@ -663,61 +656,41 @@ function MetricsPanel({ metrics = {} }) {
   const waitTime = metrics.waiting_time ?? metrics.WAITING_TIME ?? 0;
 
   return (
-    <div className="panel-card">
-      <div className="panel-header">
-        <div className="panel-title">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="panel-title-icon">
-            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
-          </svg>
-          System Performance
-        </div>
-        <span style={{ fontSize: '0.7rem', color: '#64748b', fontFamily: 'JetBrains Mono' }}>REAL-TIME</span>
+    <div className="panel-block">
+      <div className="panel-title-bar">
+        <span className="panel-title-text">// 01_SYSTEM_PERFORMANCE</span>
+        <span className="panel-title-tag">[METRICS_BUS]</span>
       </div>
 
-      <div className="metrics-grid">
-        <div className="metric-stat-box highlight">
-          <span className="metric-label">Makespan</span>
-          <div className="metric-value-row">
-            <span className="metric-number">{makespan.toFixed(0)}</span>
-            <span className="metric-unit">ticks</span>
-          </div>
+      <div className="metrics-table-grid">
+        <div className="data-well accent">
+          <div className="data-well-label">MAKESPAN</div>
+          <div className="data-well-val">{makespan.toFixed(0)} <span style={{ fontSize: '0.65rem' }}>t</span></div>
         </div>
 
-        <div className="metric-stat-box success">
-          <span className="metric-label">Throughput</span>
-          <div className="metric-value-row">
-            <span className="metric-number">{throughput.toFixed(3)}</span>
-            <span className="metric-unit">t/s</span>
-          </div>
+        <div className="data-well good">
+          <div className="data-well-label">THROUGHPUT</div>
+          <div className="data-well-val">{throughput.toFixed(3)} <span style={{ fontSize: '0.65rem' }}>t/s</span></div>
         </div>
 
-        <div className={`metric-stat-box ${collisions > 0 ? 'danger' : 'success'}`}>
-          <span className="metric-label">Collisions</span>
-          <div className="metric-value-row">
-            <span className="metric-number">{collisions}</span>
-          </div>
+        <div className={`data-well ${collisions > 0 ? 'err' : 'good'}`}>
+          <div className="data-well-label">COLLISIONS</div>
+          <div className="data-well-val">{collisions}</div>
         </div>
 
-        <div className={`metric-stat-box ${deadlocks > 0 ? 'warning' : 'success'}`}>
-          <span className="metric-label">Deadlocks</span>
-          <div className="metric-value-row">
-            <span className="metric-number">{deadlocks}</span>
-          </div>
+        <div className={`data-well ${deadlocks > 0 ? 'warn' : 'good'}`}>
+          <div className="data-well-label">DEADLOCKS</div>
+          <div className="data-well-val">{deadlocks}</div>
         </div>
 
-        <div className="metric-stat-box highlight">
-          <span className="metric-label">Re-plans</span>
-          <div className="metric-value-row">
-            <span className="metric-number">{replans}</span>
-          </div>
+        <div className="data-well accent">
+          <div className="data-well-label">RE-PLANS</div>
+          <div className="data-well-val">{replans}</div>
         </div>
 
-        <div className="metric-stat-box warning">
-          <span className="metric-label">Wait Time</span>
-          <div className="metric-value-row">
-            <span className="metric-number">{waitTime.toFixed(0)}</span>
-            <span className="metric-unit">ticks</span>
-          </div>
+        <div className="data-well warn">
+          <div className="data-well-label">WAIT_TIME</div>
+          <div className="data-well-val">{waitTime.toFixed(0)} <span style={{ fontSize: '0.65rem' }}>t</span></div>
         </div>
       </div>
     </div>
@@ -725,10 +698,9 @@ function MetricsPanel({ metrics = {} }) {
 }
 
 /* --------------------------------------------------------------------------
-   TASK QUEUE & DISTRIBUTION PANEL (FIXED & INTERACTIVE)
+   TASK QUEUE REGISTERS (Q / A / W / C)
    -------------------------------------------------------------------------- */
 function TasksPanel({ tasks = [] }) {
-  // Support string enum representations as well as legacy numbers
   const queued = tasks.filter(t => t.status === 'QUEUED' || t.status === 1).length;
   const assigned = tasks.filter(t => t.status === 'ASSIGNED' || t.status === 2).length;
   const inprog = tasks.filter(t => t.status === 'IN_PROGRESS' || t.status === 3).length;
@@ -736,103 +708,83 @@ function TasksPanel({ tasks = [] }) {
   const total = queued + assigned + inprog + comp || 1;
 
   return (
-    <div className="panel-card">
-      <div className="panel-header">
-        <div className="panel-title">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="panel-title-icon">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-            <polyline points="14 2 14 8 20 8" />
-            <line x1="16" y1="13" x2="8" y2="13" />
-            <line x1="16" y1="17" x2="8" y2="17" />
-          </svg>
-          Warehouse Tasks Queue
-        </div>
-        <span style={{ fontSize: '0.7rem', color: '#64748b', fontFamily: 'JetBrains Mono' }}>
-          TOTAL: {tasks.length}
-        </span>
+    <div className="panel-block">
+      <div className="panel-title-bar">
+        <span className="panel-title-text">// 02_TASK_ALLOCATOR_REGISTERS</span>
+        <span className="panel-title-tag">TOTAL: {tasks.length}</span>
       </div>
 
-      <div className="task-counters-row">
-        <div className="task-pill q">
-          <span className="task-pill-tag">QUEUED (Q)</span>
-          <span className="task-pill-count">{queued}</span>
+      <div className="task-registers">
+        <div className="task-register reg-q">
+          <div className="reg-label">Q (QUEUED)</div>
+          <div className="reg-val" style={{ color: 'var(--sim-blue)' }}>{queued}</div>
         </div>
-        <div className="task-pill a">
-          <span className="task-pill-tag">ASSIGNED (A)</span>
-          <span className="task-pill-count">{assigned}</span>
+        <div className="task-register reg-a">
+          <div className="reg-label">A (ASSIGNED)</div>
+          <div className="reg-val" style={{ color: 'var(--sim-yellow)' }}>{assigned}</div>
         </div>
-        <div className="task-pill w">
-          <span className="task-pill-tag">WORKING (W)</span>
-          <span className="task-pill-count">{inprog}</span>
+        <div className="task-register reg-w">
+          <div className="reg-label">W (WORKING)</div>
+          <div className="reg-val" style={{ color: 'var(--mona-orange)' }}>{inprog}</div>
         </div>
-        <div className="task-pill c">
-          <span className="task-pill-tag">COMPLETED (C)</span>
-          <span className="task-pill-count" style={{ color: '#00ff9d' }}>{comp}</span>
+        <div className="task-register reg-c">
+          <div className="reg-label">C (DONE)</div>
+          <div className="reg-val" style={{ color: 'var(--sim-green)' }}>{comp}</div>
         </div>
       </div>
 
-      {/* Multi-Segment Queue Distribution Bar */}
-      <div className="task-distribution-bar">
-        <div className="task-bar-segment q" style={{ width: `${(queued / total) * 100}%` }} title={`Queued: ${queued}`}></div>
-        <div className="task-bar-segment a" style={{ width: `${(assigned / total) * 100}%` }} title={`Assigned: ${assigned}`}></div>
-        <div className="task-bar-segment w" style={{ width: `${(inprog / total) * 100}%` }} title={`In Progress: ${inprog}`}></div>
-        <div className="task-bar-segment c" style={{ width: `${(comp / total) * 100}%` }} title={`Completed: ${comp}`}></div>
+      {/* Segmented Queue Bar */}
+      <div className="segmented-queue-bar">
+        <div className="seg-q" style={{ width: `${(queued / total) * 100}%` }}></div>
+        <div className="seg-a" style={{ width: `${(assigned / total) * 100}%` }}></div>
+        <div className="seg-w" style={{ width: `${(inprog / total) * 100}%` }}></div>
+        <div className="seg-c" style={{ width: `${(comp / total) * 100}%` }}></div>
       </div>
     </div>
   );
 }
 
 /* --------------------------------------------------------------------------
-   ROBOT FLEET STATUS PANEL
+   ROBOT FLEET DIAGNOSTICS PANEL
    -------------------------------------------------------------------------- */
-function RobotsPanel({ robots = [], hoveredRobot, setHoveredRobot }) {
+function RobotsPanel({ robots = [], activeRobotId, setActiveRobotId }) {
   return (
-    <div className="panel-card">
-      <div className="panel-header">
-        <div className="panel-title">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="panel-title-icon">
-            <rect x="2" y="5" width="20" height="14" rx="3" />
-            <path d="M7 15h.01M17 15h.01M9 9h6" />
-          </svg>
-          Active AMR Fleet ({robots.length})
-        </div>
+    <div className="panel-block">
+      <div className="panel-title-bar">
+        <span className="panel-title-text">// 03_MONA_FLEET_NODES</span>
+        <span className="panel-title-tag">ONLINE: {robots.length}</span>
       </div>
 
-      <div className="robots-list">
+      <div className="robot-nodes-list">
         {robots.map((r) => {
-          const isHovered = hoveredRobot === r.robot_id;
+          const isSelected = activeRobotId === r.robot_id;
           const statusLower = (r.status || 'idle').toLowerCase();
-          const batteryColor = r.battery > 50 ? '#00ff9d' : (r.battery > 20 ? '#ffb800' : '#ff3366');
+          const batColor = r.battery > 50 ? 'var(--sim-green)' : (r.battery > 20 ? 'var(--sim-yellow)' : 'var(--sim-red)');
 
           return (
             <div
               key={r.robot_id}
-              className="robot-row-card"
-              style={{
-                borderColor: isHovered ? '#00f0ff' : 'var(--border-subtle)',
-                background: isHovered ? 'var(--bg-card-hover)' : 'var(--bg-card)'
-              }}
-              onMouseEnter={() => setHoveredRobot(r.robot_id)}
-              onMouseLeave={() => setHoveredRobot(null)}
+              className="robot-node-card"
+              style={{ borderColor: isSelected ? 'var(--sim-green)' : 'var(--sim-border)' }}
+              onClick={() => setActiveRobotId(r.robot_id)}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                <span className="robot-id-badge">{r.robot_id.replace('robot-', 'AMR-')}</span>
-                <span className={`robot-status-pill ${statusLower}`}>{r.status}</span>
+              <div className="node-header">
+                <span className="node-id">{r.robot_id.toUpperCase()}</span>
+                <span className={`node-state-pill ${statusLower}`}>{r.status}</span>
                 {r.has_cargo && (
-                  <span style={{ fontSize: '0.65rem', background: '#f97316', color: '#fff', padding: '0.1rem 0.35rem', borderRadius: '3px', fontWeight: 'bold' }}>
-                    CARGO
+                  <span style={{ fontSize: '0.65rem', background: '#78350f', color: '#fff', padding: '0.1rem 0.3rem', border: '1px solid #d97706' }}>
+                    PALLET
                   </span>
                 )}
               </div>
 
-              <div className="battery-display">
-                <div className="battery-track">
-                  <div
-                    className="battery-bar-fill"
-                    style={{ width: `${r.battery}%`, background: batteryColor }}
-                  ></div>
-                </div>
-                <span className="battery-percent">{r.battery.toFixed(0)}%</span>
+              <div className="node-specs">
+                <span>POS: ({r.position[0].toFixed(1)}, {r.position[1].toFixed(1)})</span>
+                <span>BAT: {r.battery.toFixed(0)}%</span>
+              </div>
+
+              <div className="node-battery-bar">
+                <div className="fill" style={{ width: `${r.battery}%`, background: batColor }}></div>
               </div>
             </div>
           );
@@ -843,55 +795,30 @@ function RobotsPanel({ robots = [], hoveredRobot, setHoveredRobot }) {
 }
 
 /* --------------------------------------------------------------------------
-   RECENT CONFLICTS LOG PANEL (FIXED & LIVE)
+   TERMINAL CONFLICT / RESOLUTION LOG
    -------------------------------------------------------------------------- */
 function ConflictsPanel({ conflicts = [] }) {
   return (
-    <div className="panel-card">
-      <div className="panel-header">
-        <div className="panel-title">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="panel-title-icon">
-            <polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2" />
-            <line x1="12" y1="8" x2="12" y2="12" />
-            <line x1="12" y1="16" x2="12.01" y2="16" />
-          </svg>
-          Recent Conflicts & Resolutions
-        </div>
-        <span style={{ fontSize: '0.7rem', color: '#64748b', fontFamily: 'JetBrains Mono' }}>
-          {conflicts.length} EVENTS
-        </span>
+    <div className="panel-block">
+      <div className="panel-title-bar">
+        <span className="panel-title-text">// 04_COORDINATION_EVENT_STREAM</span>
+        <span className="panel-title-tag">{conflicts.length} EVENTS</span>
       </div>
 
       {conflicts.length === 0 ? (
-        <div className="empty-state">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#00ff9d" strokeWidth="2">
-            <polyline points="20 6 9 17 4 12" />
-          </svg>
-          Dynamic Reservation Nominal • Zero Active Conflicts
+        <div style={{ padding: '0.5rem', color: 'var(--sim-text-dim)', fontSize: '0.7rem', background: '#0d0f12', border: '1px solid var(--sim-border)' }}>
+          [OK] Dynamic reservations nominal. Zero active conflicts.
         </div>
       ) : (
-        <div className="conflicts-feed">
-          {conflicts.slice(-6).reverse().map((c, i) => {
-            const isDeadlock = c.type.includes('DEADLOCK');
-            const isVertex = c.type.includes('VERTEX');
-            const isEdge = c.type.includes('EDGE');
-            const badgeClass = isDeadlock ? 'deadlock' : (isVertex ? 'vertex' : (isEdge ? 'edge' : 'choke'));
-
-            return (
-              <div key={i} className="conflict-item">
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                  <span className="conflict-tick">#{c.tick}</span>
-                  <span className={`conflict-badge ${badgeClass}`}>
-                    {c.type.replace('_CONFLICT', '')}
-                  </span>
-                  <span className="conflict-agents">
-                    {c.robot_id} ↔ {c.peer_id}
-                  </span>
-                </div>
-                <span className="conflict-outcome">&rarr; {c.outcome}</span>
-              </div>
-            );
-          })}
+        <div className="terminal-event-log">
+          {conflicts.slice(-6).reverse().map((c, i) => (
+            <div key={i} className="log-entry">
+              <span className="log-tick">[T+{c.tick}]</span>
+              <span className="log-type">{c.type.replace('_CONFLICT', '')}</span>
+              <span className="log-detail">{c.robot_id} &lt;-&gt; {c.peer_id}</span>
+              <span className="log-outcome">&gt;&gt; {c.outcome}</span>
+            </div>
+          ))}
         </div>
       )}
     </div>
@@ -899,7 +826,7 @@ function ConflictsPanel({ conflicts = [] }) {
 }
 
 /* --------------------------------------------------------------------------
-   BENCHMARK PANEL
+   BENCHMARK HARNESS
    -------------------------------------------------------------------------- */
 function BenchmarkPanel({ scenario, setScenario }) {
   const [running, setRunning] = useState(false);
@@ -917,51 +844,45 @@ function BenchmarkPanel({ scenario, setScenario }) {
       const resData = await res.json();
       setResults(resData.results);
     } catch (e) {
-      console.error("Benchmark error", e);
+      console.error("Benchmark error:", e);
     } finally {
       setRunning(false);
     }
   };
 
   return (
-    <div className="panel-card">
-      <div className="panel-header">
-        <div className="panel-title">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="panel-title-icon">
-            <line x1="18" y1="20" x2="18" y2="10" />
-            <line x1="12" y1="20" x2="12" y2="4" />
-            <line x1="6" y1="20" x2="6" y2="14" />
-          </svg>
-          Scenario Benchmark Runner
-        </div>
+    <div className="panel-block">
+      <div className="panel-title-bar">
+        <span className="panel-title-text">// 05_BENCHMARK_HARNESS</span>
+        <span className="panel-title-tag">SIM_TRIALS</span>
       </div>
 
-      <div className="benchmark-controls">
+      <div className="scenario-select-row">
         <select
           value={scenario}
           onChange={(e) => setScenario(e.target.value)}
-          className="select-cyber"
+          className="scenario-select"
         >
           <option value="S1_Normal">S1: Normal Warehouse</option>
           <option value="S2_Crossing">S2: Crossing Traffic</option>
           <option value="S3_Narrow">S3: Narrow Aisle Stress</option>
-          <option value="S4_Blocked">S4: Dynamic Blocked Aisle</option>
-          <option value="S5_Failure">S5: Mid-Run Robot Failure</option>
-          <option value="S6_CommDelay">S6: Communication Loss</option>
+          <option value="S4_Blocked">S4: Blocked Aisle</option>
+          <option value="S5_Failure">S5: Robot Failure</option>
+          <option value="S6_CommDelay">S6: Comm Delay</option>
         </select>
-        <button className="btn-cyber" onClick={runBenchmark} disabled={running}>
-          {running ? 'Benchmarking...' : 'Execute'}
+        <button className="btn-terminal" onClick={runBenchmark} disabled={running}>
+          {running ? '[TESTING...]' : '[EXEC_BENCH]'}
         </button>
       </div>
 
       {results && (
-        <table className="benchmark-table">
+        <table className="bench-table">
           <thead>
             <tr>
-              <th>Strategy</th>
-              <th>Wait (t)</th>
-              <th>Collisions</th>
-              <th>Done</th>
+              <th>STRATEGY</th>
+              <th>WAIT</th>
+              <th>COLL</th>
+              <th>DONE</th>
             </tr>
           </thead>
           <tbody>
@@ -969,7 +890,7 @@ function BenchmarkPanel({ scenario, setScenario }) {
               <tr key={strat} className={strat === 'P1' ? 'highlight' : ''}>
                 <td>{strat}</td>
                 <td>{results[strat]?.wait?.toFixed(1) ?? '-'}</td>
-                <td style={{ color: results[strat]?.collisions === 0 ? '#00ff9d' : '#ff3366' }}>
+                <td style={{ color: results[strat]?.collisions === 0 ? 'var(--sim-green)' : 'var(--sim-red)' }}>
                   {results[strat]?.collisions?.toFixed(1) ?? '-'}
                 </td>
                 <td>{results[strat]?.completed?.toFixed(1) ?? '-'}</td>
@@ -983,32 +904,25 @@ function BenchmarkPanel({ scenario, setScenario }) {
 }
 
 /* --------------------------------------------------------------------------
-   SECURITY / FAULT TOLERANCE PANEL
+   FDIR SAFETY & CRYPTO SENTINEL
    -------------------------------------------------------------------------- */
 function SecurityPanel({ alerts = [] }) {
   return (
-    <div className="panel-card">
-      <div className="panel-header">
-        <div className="panel-title">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="panel-title-icon">
-            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-          </svg>
-          Security & Trust Monitor
-        </div>
+    <div className="panel-block">
+      <div className="panel-title-bar">
+        <span className="panel-title-text">// 06_FDIR_SAFETY_WATCHDOG</span>
+        <span className="panel-title-tag">ISO_13849</span>
       </div>
 
       {alerts.length === 0 ? (
-        <div className="empty-state">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#00ff9d" strokeWidth="2">
-            <polyline points="20 6 9 17 4 12" />
-          </svg>
-          Zero Anomalies • Cryptographic Proofs Verified
+        <div style={{ color: 'var(--sim-green)', fontSize: '0.7rem' }}>
+          [NOMINAL] Zero Byzantine faults detected. Security watchdogs active.
         </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
           {alerts.map((a, i) => (
-            <div key={i} style={{ color: 'var(--neon-red)', fontSize: '0.75rem', fontFamily: 'JetBrains Mono' }}>
-              &bull; {a.msg}
+            <div key={i} style={{ color: 'var(--sim-red)', fontSize: '0.7rem' }}>
+              &gt;&gt; {a.msg}
             </div>
           ))}
         </div>

@@ -3,6 +3,10 @@ from models import RobotState, RobotStatus, Intent, IntentMessage, Task, TaskSta
 from interfaces import Planner, CommsChannel
 from robot.coordination import ReservationTable, PriorityCalculator, check_vertex_conflict, check_edge_swap
 
+# How many consecutive ticks a robot can wait on the same peer before
+# proactively replanning (without needing a full cycle to be detected).
+WAIT_REPLAN_THRESHOLD = 5
+
 class LocalTaskManager:
     def __init__(self, robot_state: RobotState, planner: Planner, comms: CommsChannel, costmap: Any, strategy: str = "P1", event_logger: Any = None):
         self.state = robot_state
@@ -22,6 +26,18 @@ class LocalTaskManager:
         self.waiting_on: Optional[str] = None
         self.peer_states: dict[str, IntentMessage] = {}
         self.last_seen: dict[str, float] = {}
+        # Tracks how many consecutive ticks this robot has been stuck
+        # on the *same* peer — used for proactive replan before a full
+        # cycle is detected by the global deadlock detector.
+        self.wait_ticks_on_peer: int = 0
+        self._prev_waiting_on: Optional[str] = None
+
+        # CBS integration
+        # When True, _replan() is suppressed — CBS owns all path decisions.
+        self.cbs_mode: bool = False
+        # Set to True when the robot reaches its pickup and switches to the
+        # dropoff goal. The simulator checks this flag and triggers CBS replan.
+        self.checkpoint_reached: bool = False
 
     def assign_task(self, task: Task):
         self.current_task = task
@@ -32,9 +48,16 @@ class LocalTaskManager:
         self.target_cell = task.pickup_cell
         self.wait_time = 0.0
         self.waiting_on = None
-        self._replan()
+        self.wait_ticks_on_peer = 0
+        self._prev_waiting_on = None
+        self.checkpoint_reached = False
+        if not self.cbs_mode:
+            self._replan()
 
     def _replan(self):
+        """Internal A* replan. Skipped when cbs_mode=True (CBS owns paths)."""
+        if self.cbs_mode:
+            return  # CBS will inject the path externally
         if self.target_cell:
             path = self.planner.plan(
                 start=self.state.position, 
@@ -56,6 +79,42 @@ class LocalTaskManager:
             self.state.planned_path = []
             curr_pos = (int(self.state.position[0]), int(self.state.position[1]))
             self.reservation_table.commit(self.state.robot_id, [curr_pos] * 200, self.state.timestamp)
+
+    def inject_path(self, path: List, goal: tuple):
+        """
+        Called by the CBS coordinator to load a pre-computed, conflict-free path.
+
+        Strips the start cell from the path if it matches the robot's current
+        position (the robot is already there — no need to 'move' to it).
+        Also commits the new path to the shared reservation table so that
+        the decentralised coordination layer stays in sync.
+        """
+        self.target_cell = goal
+        current_int = (int(self.state.position[0]), int(self.state.position[1]))
+        if path and (int(path[0][0]), int(path[0][1])) == current_int:
+            path = path[1:]
+        self.state.planned_path = list(path)
+        self.wait_time = 0.0
+        self.waiting_on = None
+        self.wait_ticks_on_peer = 0
+        self._prev_waiting_on = None
+        if self.state.planned_path:
+            self.state.status = RobotStatus.MOVING
+            # Keep the reservation table in sync for the comms layer
+            self.reservation_table.commit(
+                self.state.robot_id, self.state.planned_path, self.state.timestamp + 1
+            )
+
+    def get_current_goal(self) -> Optional[tuple]:
+        """Returns the robot's active goal cell (pickup or dropoff), or None."""
+        return self.target_cell
+
+    def _replan_fallback(self):
+        """Emergency internal A* replan that ignores cbs_mode (e.g., total path failure)."""
+        prev = self.cbs_mode
+        self.cbs_mode = False
+        self._replan()
+        self.cbs_mode = prev
 
     def _update_peer_reservations(self, current_time: float):
         """Update local reservation table based on received intents."""
@@ -102,8 +161,29 @@ class LocalTaskManager:
         
         # Check static obstacles (Phase 4 Blocked Aisles)
         if self.costmap.get_cell(next_cell[0], next_cell[1]) == '#':
-            self._replan()
+            if self.cbs_mode:
+                # Blocked aisle: clear path, signal simulator to rerun CBS
+                self.state.planned_path = []
+                self.checkpoint_reached = True  # reuse flag to signal replan needed
+            else:
+                self._replan()
             return False
+
+        if self.cbs_mode:
+            # CBS produced a conflict-free path — skip priority negotiation and
+            # reservation-table look-ahead, but still do a physical-block check:
+            # if another robot moved into our target cell earlier in this same
+            # simulation tick (and staked it via the post-move commit), wait 1 tick.
+            # The rolling-horizon CBS replan will resync paths within CBS_REPLAN_INTERVAL.
+            current_occupant = self.reservation_table.get_claimer(next_cell, current_time)
+            if current_occupant and current_occupant != self.state.robot_id:
+                self.state.status = RobotStatus.WAITING
+                self.wait_time += 1.0
+                self.waiting_on = current_occupant
+                return False
+            if self.state.status == RobotStatus.WAITING:
+                self.state.status = RobotStatus.MOVING
+            return True
 
         if self.strategy == "B1":
             # Independent A* (No coordination)
@@ -134,11 +214,43 @@ class LocalTaskManager:
             if (int(peer_msg.position[0]), int(peer_msg.position[1])) == next_cell:
                 if peer_msg.intent == Intent.WAIT or not peer_msg.planned_path or peer_msg.velocity == 0:
                     if self.event_logger and self.state.status != RobotStatus.WAITING:
-                        self.event_logger.log_conflict(self.state.robot_id, peer_id, "OCCUPIED_CELL", "WAIT", int(current_time))
+                            self.event_logger.log_conflict(self.state.robot_id, peer_id, "OCCUPIED_CELL", "WAIT", int(current_time))
                     self.state.status = RobotStatus.WAITING
                     self.wait_time += 1.0
                     self.waiting_on = peer_id
+                    # Track consecutive stall ticks on the same peer
+                    if peer_id == self._prev_waiting_on:
+                        self.wait_ticks_on_peer += 1
+                    else:
+                        self.wait_ticks_on_peer = 1
+                        self._prev_waiting_on = peer_id
+                    # Proactive replan: peer is also stuck (mutual starvation)
+                    if self.wait_ticks_on_peer >= WAIT_REPLAN_THRESHOLD:
+                        peer_msg = self.peer_states.get(peer_id)
+                        peer_stuck = (peer_msg is not None and
+                                      (peer_msg.intent == Intent.WAIT or peer_msg.velocity == 0))
+                        if peer_stuck:
+                            if self.event_logger:
+                                self.event_logger.log_conflict(
+                                    self.state.robot_id, peer_id,
+                                    "MUTUAL_STARVATION", "PROACTIVE_REPLAN", int(current_time))
+                            self.wait_ticks_on_peer = 0
+                            self._prev_waiting_on = None
+                            self._replan()
                     return False
+
+        # Check if next_cell is already physically occupied in this tick
+        # (a peer moved there earlier in the same simulation step and staked it).
+        current_occupant = self.reservation_table.get_claimer(next_cell, current_time)
+        if current_occupant and current_occupant != self.state.robot_id:
+            if self.event_logger and self.state.status != RobotStatus.WAITING:
+                self.event_logger.log_conflict(
+                    self.state.robot_id, current_occupant,
+                    "PHYSICAL_BLOCK", "WAIT", int(current_time))
+            self.state.status = RobotStatus.WAITING
+            self.wait_time += 1.0
+            self.waiting_on = current_occupant
+            return False
 
         conflicting_robot = check_vertex_conflict(self.reservation_table, self.state.robot_id, next_cell, current_time + 1)
         conflict_type = "VERTEX_CONFLICT"
@@ -150,36 +262,46 @@ class LocalTaskManager:
             self.waiting_on = conflicting_robot
             
             # Conflict Resolution: Compare priorities
+            # CRITICAL: use strict > so that on equal priority the lower-ranked
+            # robot (smaller tuple) always yields — preventing both robots from
+            # simultaneously deciding to "proceed" which causes a collision.
             my_pri = self.get_priority()
             if conflicting_robot in self.peer_states:
                 peer_msg = self.peer_states[conflicting_robot]
-                peer_pri = self.priority_calc.calculate(float(peer_msg.priority), 0.0, peer_msg.battery, float(len(peer_msg.planned_path)), conflicting_robot)
+                # Use peer's broadcast wait indicator: if peer is broadcasting
+                # WAIT intent, treat their priority as boosted by a small wait bonus
+                # so robots that have been yielding longer get higher priority.
+                peer_wait = 1.0 if peer_msg.intent == Intent.WAIT else 0.0
+                peer_pri = self.priority_calc.calculate(
+                    float(peer_msg.priority), peer_wait, peer_msg.battery,
+                    float(len(peer_msg.planned_path)), conflicting_robot
+                )
                 
-                if my_pri < peer_pri:
-                    # I yield
+                if my_pri <= peer_pri:
+                    # I yield — I'm lower priority, or tied (peer's robot_id is >= mine)
                     if self.event_logger and self.state.status != RobotStatus.WAITING:
                         self.event_logger.log_conflict(self.state.robot_id, conflicting_robot, conflict_type, "YIELD", int(current_time))
                     self.state.status = RobotStatus.WAITING
                     self.wait_time += 1.0
                     return False
                 else:
-                    # I have higher priority, but can the other robot actually move?
-                    # If it's IDLE or WAITING physically in the cell we want, it can't yield.
+                    # I have strictly higher priority — proceed, the other robot should yield.
+                    # But only if the peer can actually move out of the cell we want.
                     px, py = peer_msg.position
                     if int(px) == next_cell[0] and int(py) == next_cell[1]:
                         if peer_msg.intent == Intent.WAIT or not peer_msg.planned_path:
-                            # We must wait, it can't get out of our way!
+                            # Peer is physically parked there and can't move — we must wait.
                             if self.event_logger and self.state.status != RobotStatus.WAITING:
                                 self.event_logger.log_conflict(self.state.robot_id, conflicting_robot, conflict_type, "WAIT_OCCUPIED", int(current_time))
                             self.state.status = RobotStatus.WAITING
                             self.wait_time += 1.0
                             return False
-                    # Otherwise proceed (other should yield)
+                    # Peer should yield — proceed
                     if self.event_logger:
                         self.event_logger.log_conflict(self.state.robot_id, conflicting_robot, conflict_type, "PRIORITY_PASS", int(current_time))
                     pass
             else:
-                # Peer unknown, play safe
+                # Peer unknown — play safe and wait
                 if self.event_logger and self.state.status != RobotStatus.WAITING:
                     self.event_logger.log_conflict(self.state.robot_id, conflicting_robot, conflict_type, "CAUTION_WAIT", int(current_time))
                 self.state.status = RobotStatus.WAITING
@@ -188,15 +310,21 @@ class LocalTaskManager:
                 
         self.waiting_on = None
         self.wait_time = 0.0
+        self.wait_ticks_on_peer = 0
+        self._prev_waiting_on = None
         if self.state.status == RobotStatus.WAITING:
             self.state.status = RobotStatus.MOVING
         return True
 
     def force_reroute(self):
-        """Called when a deadlock is broken."""
-        self._replan()
+        """Called when a deadlock is broken. If CBS manages this robot, the
+        simulator will re-run CBS; otherwise fall back to internal A*."""
+        if not self.cbs_mode:
+            self._replan()
         self.wait_time = 0.0
         self.waiting_on = None
+        self.wait_ticks_on_peer = 0
+        self._prev_waiting_on = None
 
     def tick(self, current_time: float):
         self.state.timestamp = current_time
@@ -221,6 +349,14 @@ class LocalTaskManager:
                     self.state.heading = math.degrees(math.atan2(dy, dx))
                     self.state.position = (float(next_cell[0]), float(next_cell[1]))
                     self.state.status = RobotStatus.MOVING
+                    # Immediately stake current position in the shared reservation table
+                    # so that later robots ticking in the same step see us here and
+                    # don't also move into this cell (fixes the simultaneous-entry collision).
+                    self.reservation_table.commit(
+                        self.state.robot_id,
+                        [target_int],
+                        current_time
+                    )
             elif not self.state.planned_path and self.target_cell:
                 # Reached target
                 self._handle_arrival()
@@ -268,7 +404,12 @@ class LocalTaskManager:
             if arrived:
                 self.current_task.status = TaskStatus.IN_PROGRESS
                 self.target_cell = self.current_task.dropoff_cell
-                self._replan()
+                if self.cbs_mode:
+                    # Signal the simulator to run CBS for the new dropoff goal.
+                    self.checkpoint_reached = True
+                    self.state.planned_path = []   # Clear stale pickup path
+                else:
+                    self._replan()
                 
         elif current_int == self.current_task.dropoff_cell and self.current_task.status == TaskStatus.IN_PROGRESS:
             self.current_task.status = TaskStatus.COMPLETED

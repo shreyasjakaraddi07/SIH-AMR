@@ -115,19 +115,34 @@ class ConflictResolver(BaseConflictResolver):
 
 def detect_deadlock(wait_graph: Dict[str, str]) -> Optional[List[str]]:
     """
-    Builds a wait-for dependency graph.
-    Returns a list of robot_ids forming a cycle, or None.
+    Detects a cycle in the wait-for graph using per-traversal path tracking.
+    Returns the list of robot_ids forming the cycle, or None.
+
+    Key fix over previous version: each DFS traversal maintains its own
+    in-path set so that cycles not starting at the initial node are caught
+    correctly, even when some nodes have already been globally visited.
     """
-    visited = set()
+    globally_visited: Set[str] = set()
+
     for start_node in wait_graph:
-        if start_node not in visited:
-            path = []
-            curr = start_node
-            while curr in wait_graph:
-                if curr in path:
-                    idx = path.index(curr)
-                    return path[idx:]
-                path.append(curr)
-                visited.add(curr)
-                curr = wait_graph[curr]
-    return None
+        if start_node in globally_visited:
+            continue
+
+        path: List[str] = []
+        in_path: Set[str] = set()
+        curr = start_node
+
+        while curr in wait_graph:
+            if curr in in_path:
+                # Found a cycle — extract just the cycle portion
+                idx = path.index(curr)
+                return path[idx:]
+            if curr in globally_visited:
+                # Node already fully explored without finding a cycle
+                break
+            path.append(curr)
+            in_path.add(curr)
+            curr = wait_graph[curr]
+
+        # Mark everything on this path as globally visited
+        globally_visited.update(path)
