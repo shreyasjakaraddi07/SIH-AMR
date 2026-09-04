@@ -125,7 +125,7 @@ export default function App() {
           <span className="brand-logo">Convoy</span>
           <div className="brand-divider" />
           <div className="brand-info">
-            <h1>AMR Fleet Command</h1>
+            <h1>AMR Control Panel</h1>
             <div className="brand-sub">Fleet Dispatch &amp; Telemetry</div>
           </div>
         </div>
