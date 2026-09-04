@@ -6,16 +6,10 @@ const WS_URL = 'ws://localhost:8000/ws';
 export default function App() {
   const [data, setData] = useState(null);
   const [connected, setConnected] = useState(false);
-  const [securityAlerts, setSecurityAlerts] = useState([]);
   const [selectedScenario, setSelectedScenario] = useState('S1_Normal');
   const [activeRobotId, setActiveRobotId] = useState(null);
   const [simRate, setSimRate] = useState(0.8);
-  const [toggles, setToggles] = useState({
-    lidar: true,
-    paths: true,
-    ruler: true,
-    tags: true,
-  });
+  const [toggles, setToggles] = useState({ lidar: true, paths: true, ruler: false, tags: false });
   const wsRef = useRef(null);
 
   const changeSpeed = async (rate) => {
@@ -26,184 +20,143 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ rate })
       });
-    } catch (e) {
-      console.error("Failed to set speed:", e);
-    }
+    } catch (e) { console.error('Speed error:', e); }
   };
 
   const connectWs = () => {
-    if (wsRef.current && wsRef.current.readyState <= 1) return;
+    if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
+    if (wsRef.current) {
+      try {
+        wsRef.current.onopen = null;
+        wsRef.current.onclose = null;
+        wsRef.current.onerror = null;
+        wsRef.current.onmessage = null;
+        wsRef.current.close();
+      } catch (e) { }
+      wsRef.current = null;
+    }
     try {
       const ws = new WebSocket(WS_URL);
-      ws.onopen = () => setConnected(true);
-      ws.onclose = () => {
-        setConnected(false);
-        wsRef.current = null;
+      wsRef.current = ws;
+      ws.onopen = () => {
+        if (wsRef.current === ws) setConnected(true);
       };
-      ws.onerror = () => setConnected(false);
-      ws.onmessage = (e) => {
-        try {
-          const snap = JSON.parse(e.data);
-          setData(snap);
-
-          if (snap.robots) {
-            snap.robots.forEach((r) => {
-              if (r.status === 'DEGRADED') {
-                setSecurityAlerts((prev) => {
-                  if (!prev.find((a) => a.id === r.robot_id)) {
-                    return [...prev, { id: r.robot_id, msg: `[FDIR_ALERT] ${r.robot_id} entering degraded fallback` }];
-                  }
-                  return prev;
-                });
-              }
-            });
-          }
-        } catch (err) {
-          console.error("Snapshot error:", err);
+      ws.onclose = () => {
+        if (wsRef.current === ws) {
+          wsRef.current = null;
+          setConnected(false);
         }
       };
-      wsRef.current = ws;
+      ws.onerror = () => {
+        if (wsRef.current === ws) {
+          wsRef.current = null;
+          setConnected(false);
+        }
+      };
+      ws.onmessage = (e) => {
+        if (wsRef.current === ws) {
+          try {
+            setData(JSON.parse(e.data));
+          } catch (err) {
+            console.error('Snapshot parse error:', err);
+          }
+        }
+      };
     } catch (err) {
-      console.error("WS error:", err);
+      console.error('WS error:', err);
     }
   };
 
   useEffect(() => {
     connectWs();
     return () => {
-      if (wsRef.current) wsRef.current.close();
+      if (wsRef.current) {
+        const ws = wsRef.current;
+        wsRef.current = null;
+        ws.onopen = null;
+        ws.onclose = null;
+        ws.onerror = null;
+        ws.onmessage = null;
+        try { ws.close(); } catch (e) { }
+      }
     };
   }, []);
 
   const killWs = () => {
     if (wsRef.current) {
-      wsRef.current.close();
-      setConnected(false);
+      const ws = wsRef.current;
+      wsRef.current = null;
+      ws.onopen = null;
+      ws.onclose = null;
+      ws.onerror = null;
+      ws.onmessage = null;
+      try { ws.close(); } catch (e) { }
     }
+    setConnected(false);
   };
 
   const safeData = useMemo(() => {
-    if (!data || Object.keys(data).length === 0) {
-      return {
-        tick: 0,
-        robots: [],
-        tasks: [],
-        metrics: {},
-        conflicts: [],
-        deadlocks: [],
-        grid: []
-      };
-    }
+    if (!data || Object.keys(data).length === 0)
+      return { tick: 0, robots: [], tasks: [], metrics: {}, conflicts: [], grid: [] };
     return data;
   }, [data]);
 
   return (
     <div className="app-container">
-      {/* 2000s Industrial Workbench Simulation Control Bar */}
       <header className="app-header">
         <div className="header-brand">
-          <span className="brand-badge">MONA</span>
-          <div className="brand-titles">
-            <h1>
-              <span>MONA_AMR_SIMULATOR</span>
-              <span style={{ fontSize: '0.7rem', color: 'var(--sim-text-dim)', fontWeight: 400 }}>[STAGE/GAZEBO_2D]</span>
-            </h1>
-            <div className="brand-subtitle">MODULAR OPEN NAVIGATING AMR • FDIR DISPATCH v2.6.4</div>
+          <span className="brand-logo">Convoy</span>
+          <div className="brand-divider" />
+          <div className="brand-info">
+            <h1>AMR Fleet Command</h1>
+            <div className="brand-sub">Fleet Dispatch &amp; Telemetry</div>
           </div>
         </div>
 
-        <div className="header-meta">
-          <div className="meta-box">
-            <span className="meta-label">SCENARIO:</span>
-            <span className="meta-val">{selectedScenario}</span>
+        <div className="header-right">
+          <div className="hdr-chip">
+            <span className="label">TICK</span>
+            <span className="val">T+{safeData.tick || 0}</span>
           </div>
-
-          <div className="meta-box">
-            <span className="meta-label">STEP:</span>
-            <span className="meta-val">T+{safeData.tick || 0}</span>
+          <div className={`conn-indicator ${connected ? 'online' : 'offline'}`}>
+            <span className="conn-led" />
+            {connected ? 'LIVE' : 'OFFLINE'}
           </div>
-
-          <div className={`connection-indicator ${connected ? 'online' : 'offline'}`}>
-            <span className="status-led"></span>
-            <span>{connected ? 'LINK_ACTIVE 10Hz' : 'LINK_DOWN'}</span>
-          </div>
-
-          <div>
-            {connected ? (
-              <button className="btn-terminal danger" onClick={killWs}>
-                [KILL_COMM]
-              </button>
-            ) : (
-              <button className="btn-terminal" onClick={connectWs}>
-                [RECONNECT]
-              </button>
-            )}
-          </div>
+          {connected
+            ? <button className="btn-action danger" onClick={killWs} id="btn-disconnect">Disconnect</button>
+            : <button className="btn-action primary" onClick={connectWs} id="btn-connect">Connect</button>
+          }
         </div>
       </header>
 
-      {/* Main Simulation Viewport & Instrument Panels */}
       <main className="dashboard-body">
-        {/* Left Column: 2D Simulation World */}
         <section className="map-view-container">
           <div className="map-control-bar">
             <div className="map-heading">
-              <span>// SIM_STAGE_WORLD</span>
-              <span style={{ color: 'var(--sim-text-dim)', fontSize: '0.7rem' }}>
-                {safeData.grid?.length ? `GRID: ${safeData.grid[0]?.length}x${safeData.grid.length}` : 'INITIALIZING'}
-              </span>
+              <span>Live Warehouse Map</span>
+              <span className="map-heading-badge">S1 · Normal</span>
             </div>
 
             <div className="map-toggles">
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', marginRight: '0.4rem', borderRight: '1px solid var(--sim-border)', paddingRight: '0.5rem' }}>
-                <span style={{ fontSize: '0.65rem', color: 'var(--sim-text-dim)' }}>SPEED:</span>
-                <button
-                  className={`toggle-btn ${simRate === 1.4 ? 'active' : ''}`}
-                  onClick={() => changeSpeed(1.4)}
-                  title="0.5x Slower pace (1.4s / step)"
-                >
-                  0.5x
-                </button>
-                <button
-                  className={`toggle-btn ${simRate === 0.8 ? 'active' : ''}`}
-                  onClick={() => changeSpeed(0.8)}
-                  title="1.0x Normal smooth pace (0.8s / step)"
-                >
-                  1.0x
-                </button>
-                <button
-                  className={`toggle-btn ${simRate === 0.4 ? 'active' : ''}`}
-                  onClick={() => changeSpeed(0.4)}
-                  title="2.0x Fast pace (0.4s / step)"
-                >
-                  2.0x
-                </button>
+              <div className="speed-group">
+                <span className="speed-label">SPEED</span>
+                {[['0.5×', 1.4], ['1×', 0.8], ['2×', 0.4]].map(([label, rate]) => (
+                  <button
+                    key={rate}
+                    className={`toggle-btn ${simRate === rate ? 'active' : ''}`}
+                    onClick={() => changeSpeed(rate)}
+                  >{label}</button>
+                ))}
               </div>
-
-              <button
-                className={`toggle-btn ${toggles.lidar ? 'active' : ''}`}
-                onClick={() => setToggles(prev => ({ ...prev, lidar: !prev.lidar }))}
-              >
-                [LIDAR_RAYS]
-              </button>
-              <button
-                className={`toggle-btn ${toggles.paths ? 'active' : ''}`}
-                onClick={() => setToggles(prev => ({ ...prev, paths: !prev.paths }))}
-              >
-                [PLANNED_PATH]
-              </button>
-              <button
-                className={`toggle-btn ${toggles.ruler ? 'active' : ''}`}
-                onClick={() => setToggles(prev => ({ ...prev, ruler: !prev.ruler }))}
-              >
-                [AXIS_RULER]
-              </button>
-              <button
-                className={`toggle-btn ${toggles.tags ? 'active' : ''}`}
-                onClick={() => setToggles(prev => ({ ...prev, tags: !prev.tags }))}
-              >
-                [CELL_TAGS]
-              </button>
+              {[['LIDAR', 'lidar'], ['PATHS', 'paths'], ['GRID', 'ruler'], ['LABELS', 'tags']].map(([label, key]) => (
+                <button
+                  key={key}
+                  className={`toggle-btn ${toggles[key] ? 'active' : ''}`}
+                  onClick={() => setToggles(p => ({ ...p, [key]: !p[key] }))}
+                >{label}</button>
+              ))}
             </div>
           </div>
 
@@ -217,20 +170,20 @@ export default function App() {
             setActiveRobotId={setActiveRobotId}
           />
 
-          <div className="map-status-strip">
-            <span>COORDINATE_FRAME: /map | ODOMETRY: DIFF_DRIVE | RESOLUTION: 1.0m/CELL</span>
-            <span>AMRS_ACTIVE: {safeData.robots?.length || 0} | CARGO_IN_TRANSIT: {safeData.tasks?.filter(t => t.status === 'IN_PROGRESS' || t.status === 3).length || 0}</span>
+          <div className="map-status-bar">
+            <span>AMRs Active: <span className="stat">{safeData.robots?.filter(r => r.status !== 'OFFLINE').length || 0}</span></span>
+            <span>In Transit: <span className="stat">{safeData.tasks?.filter(t => t.status === 'IN_PROGRESS' || t.status === 3).length || 0}</span></span>
+            <span>Completed: <span className="stat">{safeData.tasks?.filter(t => t.status === 'COMPLETED' || t.status === 4).length || 0}</span></span>
+            <span>Telemetry: <span className={`stat ${connected ? '' : 'warn'}`}>{connected ? 'Streaming' : 'Paused'}</span></span>
           </div>
         </section>
 
-        {/* Right Column: Low-Level Telemetry & Diagnostics */}
         <aside className="sidebar-container">
-          <BenchmarkPanel scenario={selectedScenario} setScenario={setSelectedScenario} />
           <MetricsPanel metrics={safeData.metrics} />
           <TasksPanel tasks={safeData.tasks} />
           <RobotsPanel robots={safeData.robots} activeRobotId={activeRobotId} setActiveRobotId={setActiveRobotId} />
           <ConflictsPanel conflicts={safeData.conflicts} />
-          <SecurityPanel alerts={securityAlerts} />
+          <BenchmarkPanel scenario={selectedScenario} setScenario={setSelectedScenario} />
         </aside>
       </main>
     </div>
@@ -238,16 +191,16 @@ export default function App() {
 }
 
 /* --------------------------------------------------------------------------
-   GAZEBO / PLAYER-STAGE 2D SIMULATION MAP
+   WAREHOUSE MAP
    -------------------------------------------------------------------------- */
 function WarehouseMap({ robots = [], tasks = [], grid = [], toggles, simRate = 0.8, activeRobotId, setActiveRobotId }) {
-  const CELL = 42; // Simulation cell scale
+  const CELL = 40;
 
   if (!grid || grid.length === 0) {
     return (
-      <div className="map-viewport">
-        <div style={{ color: 'var(--sim-text-dim)', fontSize: '0.8rem' }}>
-          [STAGE] Waiting for warehouse world map...
+      <div className="map-viewport" style={{ alignItems: 'center', justifyContent: 'center', display: 'flex' }}>
+        <div style={{ color: 'var(--text-dim)', fontSize: '0.8rem', fontFamily: 'var(--font-mono)' }}>
+          Waiting for warehouse map data...
         </div>
       </div>
     );
@@ -257,9 +210,9 @@ function WarehouseMap({ robots = [], tasks = [], grid = [], toggles, simRate = 0
   const mapW = grid[0].length;
   const width = mapW * CELL;
   const height = mapH * CELL;
-
-  // Selected robot object for OSD
-  const selectedRobot = activeRobotId ? robots.find(r => r.robot_id === activeRobotId) : (robots[0] || null);
+  const selectedRobot = activeRobotId
+    ? robots.find(r => r.robot_id === activeRobotId)
+    : (robots[0] || null);
 
   return (
     <div className="map-viewport">
@@ -269,224 +222,115 @@ function WarehouseMap({ robots = [], tasks = [], grid = [], toggles, simRate = 0
         preserveAspectRatio="xMidYMid meet"
       >
         <defs>
-          {/* Engineering 1m Grid Pattern */}
-          <pattern id="cad-grid" width={CELL} height={CELL} patternUnits="userSpaceOnUse">
-            <rect width={CELL} height={CELL} fill="#14171c" stroke="#21252e" strokeWidth="1" />
-            <circle cx={CELL / 2} cy={CELL / 2} r="1" fill="#383e4a" />
+          <pattern id="floor-grid" width={CELL} height={CELL} patternUnits="userSpaceOnUse">
+            <rect width={CELL} height={CELL} fill="#07090f" stroke="#0e1420" strokeWidth="1" />
+            <circle cx={CELL / 2} cy={CELL / 2} r="0.8" fill="#1a2236" />
           </pattern>
-
-          {/* Yellow/Black Safety Caution Stripes for Bays */}
-          <pattern id="caution-stripes" width="10" height="10" patternTransform="rotate(45 0 0)" patternUnits="userSpaceOnUse">
-            <line x1="0" y1="0" x2="0" y2="10" stroke="#eab308" strokeWidth="5" />
-            <line x1="5" y1="0" x2="5" y2="10" stroke="#1c1917" strokeWidth="5" />
+          <pattern id="caution" width="10" height="10" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
+            <line x1="0" y1="0" x2="0" y2="10" stroke="#f59e0b" strokeWidth="5" />
+            <line x1="5" y1="0" x2="5" y2="10" stroke="#1a0f00" strokeWidth="5" />
           </pattern>
-
-          {/* Solid Hazard Striping for Dynamic Obstacles */}
-          <pattern id="obstacle-stripes" width="8" height="8" patternTransform="rotate(-45 0 0)" patternUnits="userSpaceOnUse">
-            <line x1="0" y1="0" x2="0" y2="8" stroke="#ef4444" strokeWidth="4" />
-            <line x1="4" y1="0" x2="4" y2="8" stroke="#18181b" strokeWidth="4" />
-          </pattern>
+          <filter id="glow-cyan">
+            <feGaussianBlur stdDeviation="2" result="blur" />
+            <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+          </filter>
+          <filter id="glow-green">
+            <feGaussianBlur stdDeviation="2.5" result="blur" />
+            <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+          </filter>
+          <radialGradient id="robot-glow" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stopColor="#00d4ff" stopOpacity="0.3" />
+            <stop offset="100%" stopColor="#00d4ff" stopOpacity="0" />
+          </radialGradient>
         </defs>
 
-        {/* 1. Base Simulation Floor */}
-        <rect x="0" y="0" width={width} height={height} fill="url(#cad-grid)" />
+        {/* Floor */}
+        <rect x="0" y="0" width={width} height={height} fill="url(#floor-grid)" />
 
-        {/* 2. Grid Axis Coordinate Ticks & Rulers */}
+        {/* Coordinate rulers + Grid overlay — only when GRID is ON */}
         {toggles.ruler && (
           <g>
-            {/* Horizontal Column Numbers */}
+            {/* Bright grid lines overlay */}
             {grid[0].map((_, x) => (
-              <text
-                key={`ruler-x-${x}`}
-                x={x * CELL + CELL / 2}
-                y={9}
-                fontSize="7"
-                fontFamily="JetBrains Mono"
-                fill="#4a5263"
-                textAnchor="middle"
-              >
-                {x}
-              </text>
+              <line key={`gx-${x}`}
+                x1={x * CELL} y1={0} x2={x * CELL} y2={height}
+                stroke="#293447" strokeWidth="1" />
             ))}
-            {/* Vertical Row Numbers */}
             {grid.map((_, y) => (
-              <text
-                key={`ruler-y-${y}`}
-                x={3}
-                y={y * CELL + CELL / 2 + 2}
-                fontSize="7"
-                fontFamily="JetBrains Mono"
-                fill="#4a5263"
-                textAnchor="start"
-              >
-                {y}
-              </text>
+              <line key={`gy-${y}`}
+                x1={0} y1={y * CELL} x2={width} y2={y * CELL}
+                stroke="#293447" strokeWidth="1" />
+            ))}
+            {/* Coordinate numbers */}
+            {grid[0].map((_, x) => (
+              <text key={`rx-${x}`} x={x * CELL + CELL / 2} y={10} fontSize="7" fontFamily="JetBrains Mono"
+                fill="#64748b" textAnchor="middle" fontWeight="600">{x}</text>
+            ))}
+            {grid.map((_, y) => (
+              <text key={`ry-${y}`} x={5} y={y * CELL + CELL / 2 + 3} fontSize="7" fontFamily="JetBrains Mono"
+                fill="#64748b" textAnchor="start" fontWeight="600">{y}</text>
             ))}
           </g>
         )}
 
-        {/* 3. Static Warehouse Environment: Storage Racks, Pickups, Dropoffs */}
-        {grid.map((row, y) =>
-          row.map((cell, x) => {
-            const isRack = cell === '#';
-            const isPickup = cell === 'P';
-            const isDropoff = cell === 'D';
-            const cx = x * CELL;
-            const cy = y * CELL;
-
-            if (isRack) {
-              return (
-                <g key={`rack-${x}-${y}`}>
-                  {/* Heavy Solid Shelving Bay */}
-                  <rect
-                    x={cx + 1}
-                    y={cy + 1}
-                    width={CELL - 2}
-                    height={CELL - 2}
-                    fill="#23262f"
-                    stroke="#3f4554"
-                    strokeWidth="1.5"
-                  />
-                  {/* Diagonal Structural Steel Cross Bracing */}
-                  <line x1={cx + 2} y1={cy + 2} x2={cx + CELL - 2} y2={cy + CELL - 2} stroke="#2e333e" strokeWidth="1" />
-                  <line x1={cx + CELL - 2} y1={cy + 2} x2={cx + 2} y2={cy + CELL - 2} stroke="#2e333e" strokeWidth="1" />
-
-                  {/* Stored Industrial Timber Pallet & Boxes */}
-                  <rect x={cx + 4} y={cy + 4} width={CELL / 2 - 5} height={CELL - 8} fill="#8d6e63" stroke="#5d4037" strokeWidth="1" />
-                  <rect x={cx + CELL / 2 + 1} y={cy + 4} width={CELL / 2 - 5} height={CELL - 8} fill="#455a64" stroke="#263238" strokeWidth="1" />
-
-                  {/* Stencil Coordinates */}
-                  {toggles.tags && (
-                    <text
-                      x={cx + CELL / 2}
-                      y={cy + CELL / 2 + 3}
-                      fontSize="7"
-                      fontFamily="JetBrains Mono"
-                      fontWeight="bold"
-                      fill="#ffffff"
-                      textAnchor="middle"
-                    >
-                      {x},{y}
-                    </text>
-                  )}
-                </g>
-              );
-            }
-
-            if (isPickup) {
-              return (
-                <g key={`pickup-${x}-${y}`}>
-                  <rect
-                    x={cx + 2}
-                    y={cy + 2}
-                    width={CELL - 4}
-                    height={CELL - 4}
-                    fill="#15261d"
-                    stroke="#15803d"
-                    strokeWidth="1.5"
-                  />
-                  {/* Perimeter Warning Tape */}
-                  <rect x={cx + 2} y={cy + 2} width={CELL - 4} height={4} fill="url(#caution-stripes)" />
-                  <rect x={cx + 2} y={cy + CELL - 6} width={CELL - 4} height={4} fill="url(#caution-stripes)" />
-
-                  <text
-                    x={cx + CELL / 2}
-                    y={cy + CELL / 2 + 4}
-                    fontSize="9"
-                    fontFamily="JetBrains Mono"
-                    fontWeight="800"
-                    fill="#22c55e"
-                    textAnchor="middle"
-                  >
-                    PK-01
-                  </text>
-                </g>
-              );
-            }
-
-            if (isDropoff) {
-              return (
-                <g key={`dropoff-${x}-${y}`}>
-                  <rect
-                    x={cx + 2}
-                    y={cy + 2}
-                    width={CELL - 4}
-                    height={CELL - 4}
-                    fill="#10232e"
-                    stroke="#0284c7"
-                    strokeWidth="1.5"
-                  />
-                  {/* Perimeter Warning Tape */}
-                  <rect x={cx + 2} y={cy + 2} width={CELL - 4} height={4} fill="url(#caution-stripes)" />
-                  <rect x={cx + 2} y={cy + CELL - 6} width={CELL - 4} height={4} fill="url(#caution-stripes)" />
-
-                  <text
-                    x={cx + CELL / 2}
-                    y={cy + CELL / 2 + 4}
-                    fontSize="9"
-                    fontFamily="JetBrains Mono"
-                    fontWeight="800"
-                    fill="#38bdf8"
-                    textAnchor="middle"
-                  >
-                    DP-01
-                  </text>
-                </g>
-              );
-            }
-
-            return null;
-          })
-        )}
-
-        {/* 4. Planned Waypoint Trajectories (Nav2 / A* Plan) */}
-        {toggles.paths && robots.map((r) => {
-          if (!r.planned_path || r.planned_path.length === 0) return null;
-          const currentPos = [r.position[0] * CELL + CELL / 2, r.position[1] * CELL + CELL / 2];
-          const pts = [currentPos, ...r.planned_path.map(p => [p[0] * CELL + CELL / 2, p[1] * CELL + CELL / 2])];
-          const isWaiting = r.status === 'WAITING';
-          const pathColor = isWaiting ? '#eab308' : '#22c55e';
-
-          return (
-            <g key={`nav2-path-${r.robot_id}`}>
-              {/* Discrete Waypoint Polyline */}
-              <polyline
-                points={pts.map(p => p.join(',')).join(' ')}
-                fill="none"
-                stroke={pathColor}
-                strokeWidth="1.5"
-                strokeDasharray="4 2"
-              />
-              {/* Waypoint Nodes */}
-              {r.planned_path.map((p, idx) => (
-                <rect
-                  key={`node-${r.robot_id}-${idx}`}
-                  x={p[0] * CELL + CELL / 2 - 2}
-                  y={p[1] * CELL + CELL / 2 - 2}
-                  width="4"
-                  height="4"
-                  fill={pathColor}
-                />
-              ))}
-              {/* Target Goal Cell Box */}
-              {r.planned_path.length > 0 && (
-                <rect
-                  x={r.planned_path[r.planned_path.length - 1][0] * CELL + 3}
-                  y={r.planned_path[r.planned_path.length - 1][1] * CELL + 3}
-                  width={CELL - 6}
-                  height={CELL - 6}
-                  fill="none"
-                  stroke={pathColor}
-                  strokeWidth="1.5"
-                  strokeDasharray="3 2"
-                />
+        {/* Static environment */}
+        {grid.map((row, y) => row.map((cell, x) => {
+          const cx = x * CELL, cy = y * CELL;
+          if (cell === '#') return (
+            <g key={`rack-${x}-${y}`}>
+              <rect x={cx + 1} y={cy + 1} width={CELL - 2} height={CELL - 2} fill="#0d1525" stroke="#1e2d47" strokeWidth="1.5" rx="1" />
+              <rect x={cx + 3} y={cy + 3} width={CELL / 2 - 4} height={CELL - 6} fill="#141c2b" stroke="#2a3d5c" strokeWidth="1" rx="1" />
+              <rect x={cx + CELL / 2 + 1} y={cy + 3} width={CELL / 2 - 4} height={CELL - 6} fill="#101828" stroke="#1e2d47" strokeWidth="1" rx="1" />
+              <line x1={cx + 2} y1={cy + 2} x2={cx + CELL - 2} y2={cy + CELL - 2} stroke="#1a2236" strokeWidth="0.5" />
+              <line x1={cx + CELL - 2} y1={cy + 2} x2={cx + 2} y2={cy + CELL - 2} stroke="#1a2236" strokeWidth="0.5" />
+              {toggles.tags && (
+                <text x={cx + CELL / 2} y={cy + CELL / 2 + 2} fontSize="7" fontFamily="JetBrains Mono"
+                  fill="#94a3b8" textAnchor="middle" fontWeight="600">{x},{y}</text>
               )}
+            </g>
+          );
+
+          if (cell === 'P') return (
+            <g key={`pk-${x}-${y}`}>
+              <rect x={cx + 2} y={cy + 2} width={CELL - 4} height={CELL - 4} fill="rgba(16,185,129,0.08)" stroke="#10b981" strokeWidth="1.5" rx="2" />
+              <rect x={cx + 2} y={cy + 2} width={CELL - 4} height={4} fill="url(#caution)" opacity="0.6" />
+              <rect x={cx + 2} y={cy + CELL - 6} width={CELL - 4} height={4} fill="url(#caution)" opacity="0.6" />
+              <text x={cx + CELL / 2} y={cy + CELL / 2 + 4} fontSize="8" fontFamily="JetBrains Mono" fontWeight="700"
+                fill="#10b981" textAnchor="middle" filter="url(#glow-green)">PK</text>
+            </g>
+          );
+
+          if (cell === 'D') return (
+            <g key={`dp-${x}-${y}`}>
+              <rect x={cx + 2} y={cy + 2} width={CELL - 4} height={CELL - 4} fill="rgba(0,212,255,0.06)" stroke="#00d4ff" strokeWidth="1.5" rx="2" />
+              <rect x={cx + 2} y={cy + 2} width={CELL - 4} height={4} fill="url(#caution)" opacity="0.5" />
+              <rect x={cx + 2} y={cy + CELL - 6} width={CELL - 4} height={4} fill="url(#caution)" opacity="0.5" />
+              <text x={cx + CELL / 2} y={cy + CELL / 2 + 4} fontSize="8" fontFamily="JetBrains Mono" fontWeight="700"
+                fill="#00d4ff" textAnchor="middle" filter="url(#glow-cyan)">DP</text>
+            </g>
+          );
+          return null;
+        }))}
+
+        {/* Planned paths */}
+        {toggles.paths && robots.map(r => {
+          if (!r.planned_path?.length) return null;
+          const cur = [r.position[0] * CELL + CELL / 2, r.position[1] * CELL + CELL / 2];
+          const pts = [cur, ...r.planned_path.map(p => [p[0] * CELL + CELL / 2, p[1] * CELL + CELL / 2])];
+          const col = r.status === 'WAITING' ? '#f59e0b' : '#10b981';
+          return (
+            <g key={`path-${r.robot_id}`} opacity="0.7">
+              <polyline points={pts.map(p => p.join(',')).join(' ')}
+                fill="none" stroke={col} strokeWidth="1.5" strokeDasharray="4 3" />
+              {r.planned_path.slice(0, 8).map((p, i) => (
+                <circle key={i} cx={p[0] * CELL + CELL / 2} cy={p[1] * CELL + CELL / 2} r="1.5" fill={col} />
+              ))}
             </g>
           );
         })}
 
-        {/* 5. MONA Robots (Accurate to vladubase/mona_robot URDF Spec) */}
-        {robots.map((r) => {
+        {/* Robots */}
+        {robots.map(r => {
           const cx = r.position[0] * CELL + CELL / 2;
           const cy = r.position[1] * CELL + CELL / 2;
           const heading = r.heading || 0;
@@ -496,109 +340,78 @@ function WarehouseMap({ robots = [], tasks = [], grid = [], toggles, simRate = 0
           const hasCargo = r.has_cargo || false;
           const isSelected = activeRobotId === r.robot_id;
 
-          // Industrial MONA Palette
-          const chassisColor = isOffline ? '#475569' : (isDegraded ? '#dc2626' : (isWaiting ? '#ca8a04' : '#ff8c00'));
+          const bodyColor = isOffline ? '#1e293b'
+            : isDegraded ? '#7f1d1d'
+              : isWaiting ? '#78350f'
+                : '#0c4a6e';
+
+          const accentColor = isOffline ? '#334155'
+            : isDegraded ? '#ef4444'
+              : isWaiting ? '#f59e0b'
+                : '#00d4ff';
 
           return (
             <g
               key={r.robot_id}
-              style={{
-                transform: `translate(${cx}px, ${cy}px)`,
-                transition: `transform ${simRate}s linear`,
-                cursor: 'pointer'
-              }}
+              style={{ transform: `translate(${cx}px,${cy}px)`, transition: `transform ${simRate}s linear`, cursor: 'pointer' }}
               onClick={() => setActiveRobotId(r.robot_id)}
             >
-              {/* 2D Planar LiDAR Laser Scan Rays (RViz LaserScan Simulation) */}
+              {/* Selection glow ring */}
+              {isSelected && (
+                <circle cx="0" cy="0" r="22" fill="url(#robot-glow)" />
+              )}
+
+              {/* LiDAR rays */}
               {toggles.lidar && !isOffline && (
-                <g transform={`rotate(${heading})`} style={{ transition: 'transform 0.35s ease-in-out' }}>
-                  {/* Multiple planar laser beams fanning out */}
-                  {[-45, -30, -15, 0, 15, 30, 45].map((angle, i) => {
-                    const rayLen = isWaiting ? 26 : 42;
-                    const rad = (angle - 90) * (Math.PI / 180);
-                    const rx = Math.cos(rad) * rayLen;
-                    const ry = Math.sin(rad) * rayLen;
+                <g transform={`rotate(${heading})`} style={{ transition: 'transform 0.3s ease' }}>
+                  {[-50, -30, -15, 0, 15, 30, 50].map((angle, i) => {
+                    const len = isWaiting ? 20 : 38;
+                    const rad = (angle - 90) * Math.PI / 180;
                     return (
-                      <g key={`scan-ray-${i}`}>
-                        <line
-                          x1="0"
-                          y1="-8"
-                          x2={rx}
-                          y2={ry}
-                          stroke="#ef4444"
-                          strokeWidth="1"
-                          strokeOpacity="0.75"
-                          strokeDasharray="3 1"
-                        />
-                        {/* Laser Hit Point */}
-                        <circle cx={rx} cy={ry} r="1.5" fill="#ef4444" />
+                      <g key={i}>
+                        <line x1="0" y1="-6" x2={Math.cos(rad) * len} y2={Math.sin(rad) * len}
+                          stroke={accentColor} strokeWidth="0.8" strokeOpacity="0.4" strokeDasharray="3 2" />
+                        <circle cx={Math.cos(rad) * len} cy={Math.sin(rad) * len} r="1.2" fill={accentColor} opacity="0.6" />
                       </g>
                     );
                   })}
                 </g>
               )}
 
-              {/* MONA Chassis (Rotates to Heading) */}
-              <g transform={`rotate(${heading})`} style={{ transition: 'transform 0.35s ease-in-out' }}>
-                {/* Left & Right Differential Drive Rubber Wheels with Hubs */}
-                <rect x="-17" y="-9" width="4" height="18" fill="#090a0f" stroke="#27272a" strokeWidth="1" />
-                <rect x="13" y="-9" width="4" height="18" fill="#090a0f" stroke="#27272a" strokeWidth="1" />
+              {/* Robot body */}
+              <g transform={`rotate(${heading})`} style={{ transition: 'transform 0.3s ease' }}>
+                {/* Wheels */}
+                <rect x="-16" y="-8" width="4" height="16" fill="#060810" stroke="#1e2d47" strokeWidth="1" rx="1" />
+                <rect x="12" y="-8" width="4" height="16" fill="#060810" stroke="#1e2d47" strokeWidth="1" rx="1" />
 
-                {/* Front & Rear Swivel Casters */}
-                <circle cx="0" cy="-13" r="2" fill="#18181b" stroke="#3f3f46" strokeWidth="1" />
-                <circle cx="0" cy="13" r="2" fill="#18181b" stroke="#3f3f46" strokeWidth="1" />
+                {/* Chassis */}
+                <rect x="-12" y="-13" width="24" height="26" fill={bodyColor} stroke={accentColor} strokeWidth="1.5" rx="2" />
 
-                {/* Main Differential Drive Chassis (1.25m x 0.8m ratio from mona.urdf.xacro) */}
-                <rect
-                  x="-13"
-                  y="-15"
-                  width="26"
-                  height="30"
-                  fill={chassisColor}
-                  stroke="#000000"
-                  strokeWidth="1.5"
-                />
+                {/* Front accent stripe */}
+                <rect x="-12" y="-13" width="24" height="4" fill={accentColor} opacity="0.5" rx="2" />
 
-                {/* Dark Steel Front Bumper & Safety Lip */}
-                <rect x="-13" y="-15" width="26" height="5" fill="#18181b" stroke="#27272a" strokeWidth="1" />
+                {/* Direction arrow */}
+                <polygon points="0,-11 -4,-6 4,-6" fill={accentColor} opacity="0.9" />
 
-                {/* Central LiDAR Sensor Puck (Hokuyo / SICK planar scanner) */}
-                <circle cx="0" cy="-5" r="5" fill="#09090b" stroke="#27272a" strokeWidth="1" />
-                <circle cx="0" cy="-5" r="2" fill="#ef4444" />
+                {/* Sensor puck */}
+                <circle cx="0" cy="-3" r="4" fill="#060810" stroke={accentColor} strokeWidth="1" />
+                <circle cx="0" cy="-3" r="1.5" fill={accentColor} opacity="0.8" />
 
-                {/* Direction of Motion Arrow */}
-                <polygon points="0,-14 -3,-9 3,-9" fill="#ffffff" />
-
-                {/* Cargo Pallet Payload on Back Deck */}
+                {/* Cargo */}
                 {hasCargo && (
-                  <g transform="translate(0, 5)">
-                    <rect x="-10" y="-5" width="20" height="11" fill="#78350f" stroke="#451a03" strokeWidth="1" />
-                    <rect x="-8" y="-4" width="16" height="9" fill="#d97706" stroke="#b45309" strokeWidth="0.8" />
+                  <g transform="translate(0,6)">
+                    <rect x="-9" y="-4" width="18" height="9" fill="#7c2d12" stroke="#ea580c" strokeWidth="1" rx="1" />
+                    <rect x="-7" y="-3" width="14" height="7" fill="#c2410c" opacity="0.7" rx="1" />
                   </g>
                 )}
               </g>
 
-              {/* Identification Callout Tag (Always Upright) */}
-              <g transform="translate(0, 20)">
-                <rect
-                  x="-16"
-                  y="-6"
-                  width="32"
-                  height="12"
-                  fill="#000000"
-                  stroke={isSelected ? '#22c55e' : '#52525b'}
-                  strokeWidth="1"
-                />
-                <text
-                  x="0"
-                  y="3"
-                  fontSize="7.5"
-                  fontFamily="JetBrains Mono"
-                  fontWeight="bold"
-                  fill={isSelected ? '#22c55e' : '#ffffff'}
-                  textAnchor="middle"
-                >
-                  {r.robot_id.replace('robot-', 'AMR')}
+              {/* ID tag — always upright */}
+              <g transform="translate(0, 19)">
+                <rect x="-14" y="-6" width="28" height="12" fill="#07090f" stroke={isSelected ? accentColor : '#1e2d47'} strokeWidth="1" rx="2" />
+                <text x="0" y="3.5" fontSize="7" fontFamily="JetBrains Mono" fontWeight="700"
+                  fill={isSelected ? accentColor : '#64748b'} textAnchor="middle">
+                  {r.robot_id.replace('robot-', 'AMR-')}
                 </text>
               </g>
             </g>
@@ -606,37 +419,16 @@ function WarehouseMap({ robots = [], tasks = [], grid = [], toggles, simRate = 0
         })}
       </svg>
 
-      {/* Low-Level OSD Telemetry Box (HUD) */}
+      {/* OSD Telemetry */}
       {selectedRobot && (
         <div className="diag-overlay">
-          <div className="diag-line" style={{ borderBottom: '1px solid var(--sim-border)', paddingBottom: '0.2rem' }}>
-            <span className="label">NODE:</span>
-            <span className="val" style={{ color: 'var(--mona-orange)' }}>{selectedRobot.robot_id}</span>
-            <span style={{ color: 'var(--sim-text-dim)' }}>[{selectedRobot.status}]</span>
-          </div>
-          <div className="diag-line">
-            <span className="label">POSE [X,Y]:</span>
-            <span className="val">({selectedRobot.position[0].toFixed(2)}, {selectedRobot.position[1].toFixed(2)})</span>
-          </div>
-          <div className="diag-line">
-            <span className="label">THETA:</span>
-            <span className="val">{(selectedRobot.heading || 0).toFixed(1)} deg</span>
-          </div>
-          <div className="diag-line">
-            <span className="label">BATTERY:</span>
-            <span className="val" style={{ color: selectedRobot.battery > 30 ? 'var(--sim-green)' : 'var(--sim-red)' }}>
-              {selectedRobot.battery.toFixed(0)}%
-            </span>
-          </div>
-          <div className="diag-line">
-            <span className="label">PAYLOAD:</span>
-            <span className="val">{selectedRobot.has_cargo ? 'PALLET_LOADED' : 'UNLOADED'}</span>
-          </div>
+          <div className="diag-title">{selectedRobot.robot_id.toUpperCase()} · {selectedRobot.status}</div>
+          <div className="diag-row"><span className="lbl">Position</span><span className="val accent">({selectedRobot.position[0].toFixed(1)}, {selectedRobot.position[1].toFixed(1)})</span></div>
+          <div className="diag-row"><span className="lbl">Heading</span><span className="val">{(selectedRobot.heading || 0).toFixed(1)}°</span></div>
+          <div className="diag-row"><span className="lbl">Battery</span><span className={`val ${selectedRobot.battery > 50 ? 'good' : selectedRobot.battery > 20 ? 'warn' : 'err'}`}>{selectedRobot.battery.toFixed(0)}%</span></div>
+          <div className="diag-row"><span className="lbl">Payload</span><span className="val">{selectedRobot.has_cargo ? 'Carrying' : 'Empty'}</span></div>
           {selectedRobot.current_task_id && (
-            <div className="diag-line">
-              <span className="label">TASK_ID:</span>
-              <span className="val" style={{ fontSize: '0.65rem' }}>{selectedRobot.current_task_id.substring(0, 8)}</span>
-            </div>
+            <div className="diag-row"><span className="lbl">Task</span><span className="val accent" style={{ fontSize: '0.62rem' }}>{selectedRobot.current_task_id.substring(0, 8)}</span></div>
           )}
         </div>
       )}
@@ -645,7 +437,7 @@ function WarehouseMap({ robots = [], tasks = [], grid = [], toggles, simRate = 0
 }
 
 /* --------------------------------------------------------------------------
-   PERFORMANCE METRICS PANEL (LOW-LEVEL INSTRUMENT GAUGES)
+   METRICS PANEL
    -------------------------------------------------------------------------- */
 function MetricsPanel({ metrics = {} }) {
   const makespan = metrics.makespan ?? metrics.MAKESPAN ?? 0;
@@ -657,40 +449,34 @@ function MetricsPanel({ metrics = {} }) {
 
   return (
     <div className="panel-block">
-      <div className="panel-title-bar">
-        <span className="panel-title-text">// 01_SYSTEM_PERFORMANCE</span>
-        <span className="panel-title-tag">[METRICS_BUS]</span>
+      <div className="panel-header">
+        <span className="panel-title">Performance</span>
+        <span className="panel-tag">Live</span>
       </div>
-
-      <div className="metrics-table-grid">
-        <div className="data-well accent">
-          <div className="data-well-label">MAKESPAN</div>
-          <div className="data-well-val">{makespan.toFixed(0)} <span style={{ fontSize: '0.65rem' }}>t</span></div>
+      <div className="metrics-grid">
+        <div className="metric-card">
+          <div className="metric-label">Makespan</div>
+          <div className="metric-val">{makespan.toFixed(0)}<span className="unit">t</span></div>
         </div>
-
-        <div className="data-well good">
-          <div className="data-well-label">THROUGHPUT</div>
-          <div className="data-well-val">{throughput.toFixed(3)} <span style={{ fontSize: '0.65rem' }}>t/s</span></div>
+        <div className="metric-card">
+          <div className="metric-label">Throughput</div>
+          <div className="metric-val">{throughput.toFixed(3)}<span className="unit">t/s</span></div>
         </div>
-
-        <div className={`data-well ${collisions > 0 ? 'err' : 'good'}`}>
-          <div className="data-well-label">COLLISIONS</div>
-          <div className="data-well-val">{collisions}</div>
+        <div className={`metric-card ${collisions > 0 ? 'err' : ''}`}>
+          <div className="metric-label">Collisions</div>
+          <div className="metric-val">{collisions}</div>
         </div>
-
-        <div className={`data-well ${deadlocks > 0 ? 'warn' : 'good'}`}>
-          <div className="data-well-label">DEADLOCKS</div>
-          <div className="data-well-val">{deadlocks}</div>
+        <div className={`metric-card ${deadlocks > 0 ? 'warn' : ''}`}>
+          <div className="metric-label">Deadlocks</div>
+          <div className="metric-val">{deadlocks}</div>
         </div>
-
-        <div className="data-well accent">
-          <div className="data-well-label">RE-PLANS</div>
-          <div className="data-well-val">{replans}</div>
+        <div className="metric-card">
+          <div className="metric-label">Re-plans</div>
+          <div className="metric-val">{replans}</div>
         </div>
-
-        <div className="data-well warn">
-          <div className="data-well-label">WAIT_TIME</div>
-          <div className="data-well-val">{waitTime.toFixed(0)} <span style={{ fontSize: '0.65rem' }}>t</span></div>
+        <div className="metric-card">
+          <div className="metric-label">Wait Time</div>
+          <div className="metric-val">{waitTime.toFixed(0)}<span className="unit">t</span></div>
         </div>
       </div>
     </div>
@@ -698,7 +484,7 @@ function MetricsPanel({ metrics = {} }) {
 }
 
 /* --------------------------------------------------------------------------
-   TASK QUEUE REGISTERS (Q / A / W / C)
+   TASKS PANEL
    -------------------------------------------------------------------------- */
 function TasksPanel({ tasks = [] }) {
   const queued = tasks.filter(t => t.status === 'QUEUED' || t.status === 1).length;
@@ -709,82 +495,71 @@ function TasksPanel({ tasks = [] }) {
 
   return (
     <div className="panel-block">
-      <div className="panel-title-bar">
-        <span className="panel-title-text">// 02_TASK_ALLOCATOR_REGISTERS</span>
-        <span className="panel-title-tag">TOTAL: {tasks.length}</span>
+      <div className="panel-header">
+        <span className="panel-title">Task Queue</span>
+        <span className="panel-tag">{tasks.length} total</span>
       </div>
-
-      <div className="task-registers">
-        <div className="task-register reg-q">
-          <div className="reg-label">Q (QUEUED)</div>
-          <div className="reg-val" style={{ color: 'var(--sim-blue)' }}>{queued}</div>
+      <div className="task-counters">
+        <div className="task-counter">
+          <div className="tc-label">QUEUED</div>
+          <div className="tc-val">{queued}</div>
         </div>
-        <div className="task-register reg-a">
-          <div className="reg-label">A (ASSIGNED)</div>
-          <div className="reg-val" style={{ color: 'var(--sim-yellow)' }}>{assigned}</div>
+        <div className="task-counter">
+          <div className="tc-label">ASSIGNED</div>
+          <div className="tc-val">{assigned}</div>
         </div>
-        <div className="task-register reg-w">
-          <div className="reg-label">W (WORKING)</div>
-          <div className="reg-val" style={{ color: 'var(--mona-orange)' }}>{inprog}</div>
+        <div className="task-counter">
+          <div className="tc-label">ACTIVE</div>
+          <div className="tc-val">{inprog}</div>
         </div>
-        <div className="task-register reg-c">
-          <div className="reg-label">C (DONE)</div>
-          <div className="reg-val" style={{ color: 'var(--sim-green)' }}>{comp}</div>
+        <div className="task-counter">
+          <div className="tc-label">DONE</div>
+          <div className="tc-val">{comp}</div>
         </div>
       </div>
-
-      {/* Segmented Queue Bar */}
-      <div className="segmented-queue-bar">
-        <div className="seg-q" style={{ width: `${(queued / total) * 100}%` }}></div>
-        <div className="seg-a" style={{ width: `${(assigned / total) * 100}%` }}></div>
-        <div className="seg-w" style={{ width: `${(inprog / total) * 100}%` }}></div>
-        <div className="seg-c" style={{ width: `${(comp / total) * 100}%` }}></div>
+      <div className="task-bar">
+        <div className="task-bar-seg seg-queued" style={{ width: `${(queued / total) * 100}%` }} />
+        <div className="task-bar-seg seg-assigned" style={{ width: `${(assigned / total) * 100}%` }} />
+        <div className="task-bar-seg seg-inprog" style={{ width: `${(inprog / total) * 100}%` }} />
+        <div className="task-bar-seg seg-done" style={{ width: `${(comp / total) * 100}%` }} />
       </div>
     </div>
   );
 }
 
 /* --------------------------------------------------------------------------
-   ROBOT FLEET DIAGNOSTICS PANEL
+   ROBOTS PANEL
    -------------------------------------------------------------------------- */
 function RobotsPanel({ robots = [], activeRobotId, setActiveRobotId }) {
   return (
     <div className="panel-block">
-      <div className="panel-title-bar">
-        <span className="panel-title-text">// 03_MONA_FLEET_NODES</span>
-        <span className="panel-title-tag">ONLINE: {robots.length}</span>
+      <div className="panel-header">
+        <span className="panel-title">AMR Fleet</span>
+        <span className="panel-tag">{robots.filter(r => r.status !== 'OFFLINE').length} online</span>
       </div>
-
-      <div className="robot-nodes-list">
-        {robots.map((r) => {
-          const isSelected = activeRobotId === r.robot_id;
-          const statusLower = (r.status || 'idle').toLowerCase();
-          const batColor = r.battery > 50 ? 'var(--sim-green)' : (r.battery > 20 ? 'var(--sim-yellow)' : 'var(--sim-red)');
-
+      <div className="robot-list">
+        {robots.map(r => {
+          const statusL = (r.status || 'idle').toLowerCase();
+          const batColor = r.battery > 50 ? 'var(--green)' : r.battery > 20 ? 'var(--amber)' : 'var(--red)';
           return (
             <div
               key={r.robot_id}
-              className="robot-node-card"
-              style={{ borderColor: isSelected ? 'var(--sim-green)' : 'var(--sim-border)' }}
+              className={`robot-card ${activeRobotId === r.robot_id ? 'selected' : ''}`}
               onClick={() => setActiveRobotId(r.robot_id)}
             >
-              <div className="node-header">
-                <span className="node-id">{r.robot_id.toUpperCase()}</span>
-                <span className={`node-state-pill ${statusLower}`}>{r.status}</span>
-                {r.has_cargo && (
-                  <span style={{ fontSize: '0.65rem', background: '#78350f', color: '#fff', padding: '0.1rem 0.3rem', border: '1px solid #d97706' }}>
-                    PALLET
-                  </span>
-                )}
+              <div className="robot-card-top">
+                <span className="robot-id">{r.robot_id.replace('robot-', 'AMR-').toUpperCase()}</span>
+                <div style={{ display: 'flex', gap: '0.3rem', alignItems: 'center' }}>
+                  {r.has_cargo && <span className="cargo-tag">CARGO</span>}
+                  <span className={`status-pill ${statusL}`}>{r.status}</span>
+                </div>
               </div>
-
-              <div className="node-specs">
-                <span>POS: ({r.position[0].toFixed(1)}, {r.position[1].toFixed(1)})</span>
-                <span>BAT: {r.battery.toFixed(0)}%</span>
+              <div className="robot-meta">
+                <span>({r.position[0].toFixed(1)}, {r.position[1].toFixed(1)})</span>
+                <span>{r.battery.toFixed(0)}%</span>
               </div>
-
-              <div className="node-battery-bar">
-                <div className="fill" style={{ width: `${r.battery}%`, background: batColor }}></div>
+              <div className="bat-bar">
+                <div className="bat-fill" style={{ width: `${r.battery}%`, background: batColor }} />
               </div>
             </div>
           );
@@ -795,28 +570,25 @@ function RobotsPanel({ robots = [], activeRobotId, setActiveRobotId }) {
 }
 
 /* --------------------------------------------------------------------------
-   TERMINAL CONFLICT / RESOLUTION LOG
+   EVENTS / CONFLICTS PANEL
    -------------------------------------------------------------------------- */
 function ConflictsPanel({ conflicts = [] }) {
   return (
     <div className="panel-block">
-      <div className="panel-title-bar">
-        <span className="panel-title-text">// 04_COORDINATION_EVENT_STREAM</span>
-        <span className="panel-title-tag">{conflicts.length} EVENTS</span>
+      <div className="panel-header">
+        <span className="panel-title">Event Log</span>
+        <span className="panel-tag">{conflicts.length} events</span>
       </div>
-
       {conflicts.length === 0 ? (
-        <div style={{ padding: '0.5rem', color: 'var(--sim-text-dim)', fontSize: '0.7rem', background: '#0d0f12', border: '1px solid var(--sim-border)' }}>
-          [OK] Dynamic reservations nominal. Zero active conflicts.
-        </div>
+        <div className="no-events">✓ No active conflicts</div>
       ) : (
-        <div className="terminal-event-log">
-          {conflicts.slice(-6).reverse().map((c, i) => (
-            <div key={i} className="log-entry">
-              <span className="log-tick">[T+{c.tick}]</span>
-              <span className="log-type">{c.type.replace('_CONFLICT', '')}</span>
-              <span className="log-detail">{c.robot_id} &lt;-&gt; {c.peer_id}</span>
-              <span className="log-outcome">&gt;&gt; {c.outcome}</span>
+        <div className="event-log">
+          {conflicts.slice(-8).reverse().map((c, i) => (
+            <div key={i} className="event-entry">
+              <span className="ev-tick">T+{c.tick}</span>
+              <span className="ev-type">{c.type?.replace('_CONFLICT', '') || '—'}</span>
+              <span className="ev-detail">{c.robot_id} ↔ {c.peer_id}</span>
+              <span className="ev-out">{c.outcome}</span>
             </div>
           ))}
         </div>
@@ -826,7 +598,7 @@ function ConflictsPanel({ conflicts = [] }) {
 }
 
 /* --------------------------------------------------------------------------
-   BENCHMARK HARNESS
+   BENCHMARK PANEL
    -------------------------------------------------------------------------- */
 function BenchmarkPanel({ scenario, setScenario }) {
   const [running, setRunning] = useState(false);
@@ -841,91 +613,59 @@ function BenchmarkPanel({ scenario, setScenario }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ scenario })
       });
-      const resData = await res.json();
-      setResults(resData.results);
-    } catch (e) {
-      console.error("Benchmark error:", e);
-    } finally {
-      setRunning(false);
-    }
+      const d = await res.json();
+      setResults(d.results);
+    } catch (e) { console.error('Benchmark error:', e); }
+    finally { setRunning(false); }
   };
 
   return (
     <div className="panel-block">
-      <div className="panel-title-bar">
-        <span className="panel-title-text">// 05_BENCHMARK_HARNESS</span>
-        <span className="panel-title-tag">SIM_TRIALS</span>
+      <div className="panel-header">
+        <span className="panel-title">Benchmark</span>
+        <span className="panel-tag">4 strategies · 2 trials</span>
       </div>
 
-      <div className="scenario-select-row">
-        <select
-          value={scenario}
-          onChange={(e) => setScenario(e.target.value)}
-          className="scenario-select"
-        >
-          <option value="S1_Normal">S1: Normal Warehouse</option>
-          <option value="S2_Crossing">S2: Crossing Traffic</option>
-          <option value="S3_Narrow">S3: Narrow Aisle Stress</option>
-          <option value="S4_Blocked">S4: Blocked Aisle</option>
-          <option value="S5_Failure">S5: Robot Failure</option>
-          <option value="S6_CommDelay">S6: Comm Delay</option>
+      <div className="bench-select-row">
+        <select value={scenario} onChange={e => setScenario(e.target.value)} className="scenario-select">
+          <option value="S1_Normal">S1 · Normal Warehouse</option>
+          <option value="S2_Crossing">S2 · Crossing Traffic</option>
+          <option value="S3_Narrow">S3 · Narrow Aisle</option>
+          <option value="S4_Blocked">S4 · Blocked Aisle</option>
+          <option value="S5_Failure">S5 · Robot Failure</option>
+          <option value="S6_CommDelay">S6 · Comm Delay</option>
         </select>
-        <button className="btn-terminal" onClick={runBenchmark} disabled={running}>
-          {running ? '[TESTING...]' : '[EXEC_BENCH]'}
+        <button className="btn-run" onClick={runBenchmark} disabled={running}>
+          {running ? 'Running...' : 'Run'}
         </button>
       </div>
 
       {results && (
-        <table className="bench-table">
-          <thead>
-            <tr>
-              <th>STRATEGY</th>
-              <th>WAIT</th>
-              <th>COLL</th>
-              <th>DONE</th>
-            </tr>
-          </thead>
-          <tbody>
-            {['B0', 'B1', 'B2', 'P1'].map((strat) => (
-              <tr key={strat} className={strat === 'P1' ? 'highlight' : ''}>
-                <td>{strat}</td>
-                <td>{results[strat]?.wait?.toFixed(1) ?? '-'}</td>
-                <td style={{ color: results[strat]?.collisions === 0 ? 'var(--sim-green)' : 'var(--sim-red)' }}>
-                  {results[strat]?.collisions?.toFixed(1) ?? '-'}
-                </td>
-                <td>{results[strat]?.completed?.toFixed(1) ?? '-'}</td>
+        <>
+          <table className="bench-table">
+            <thead>
+              <tr>
+                <th>Strategy</th>
+                <th>Wait</th>
+                <th>Coll</th>
+                <th>Done</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </div>
-  );
-}
-
-/* --------------------------------------------------------------------------
-   FDIR SAFETY & CRYPTO SENTINEL
-   -------------------------------------------------------------------------- */
-function SecurityPanel({ alerts = [] }) {
-  return (
-    <div className="panel-block">
-      <div className="panel-title-bar">
-        <span className="panel-title-text">// 06_FDIR_SAFETY_WATCHDOG</span>
-        <span className="panel-title-tag">ISO_13849</span>
-      </div>
-
-      {alerts.length === 0 ? (
-        <div style={{ color: 'var(--sim-green)', fontSize: '0.7rem' }}>
-          [NOMINAL] Zero Byzantine faults detected. Security watchdogs active.
-        </div>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
-          {alerts.map((a, i) => (
-            <div key={i} style={{ color: 'var(--sim-red)', fontSize: '0.7rem' }}>
-              &gt;&gt; {a.msg}
-            </div>
-          ))}
-        </div>
+            </thead>
+            <tbody>
+              {['B0', 'B1', 'B2', 'P1'].map(s => (
+                <tr key={s} className={s === 'P1' ? 'best' : ''}>
+                  <td>{s}</td>
+                  <td>{results[s]?.wait?.toFixed(1) ?? '—'}</td>
+                  <td style={{ color: results[s]?.collisions === 0 ? 'var(--green)' : 'var(--red)' }}>
+                    {results[s]?.collisions?.toFixed(1) ?? '—'}
+                  </td>
+                  <td>{results[s]?.completed?.toFixed(1) ?? '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="bench-note">Universal S1 live map · Independent benchmark trials</div>
+        </>
       )}
     </div>
   );

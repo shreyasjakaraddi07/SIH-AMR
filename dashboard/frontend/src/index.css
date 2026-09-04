@@ -1,81 +1,75 @@
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Share+Tech+Mono&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
 :root {
-  --font-mono: 'JetBrains Mono', 'Share Tech Mono', 'Consolas', monospace;
+  --font-ui:   'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Consolas', monospace;
+  --font-logo: 'Orbitron', -apple-system, sans-serif;
 
-  /* Rugged Low-Level 2000s Simulation Palette (Gazebo / RViz / Player-Stage) */
-  --sim-bg: #141619;
-  --sim-surface: #1b1e23;
-  --sim-panel: #20242b;
-  --sim-card: #252a33;
-  --sim-card-hover: #2d333e;
+  /* ── Background Layers (Refined Slate / Graphite - Brighter than pitch-black) ── */
+  --bg-base:      #0e131b;
+  --bg-surface:   #141923;
+  --bg-panel:     #1a202c;
+  --bg-card:      #222a3a;
+  --bg-card-h:    #2a3548;
+  --bg-header:    #161c26;
 
-  --sim-border: #383e4a;
-  --sim-border-light: #4a5263;
-  --sim-border-dark: #0e1012;
+  /* ── Map Specific (Kept dark so live robots & grid pop) ── */
+  --map-bg:       #080b12;
 
-  --sim-text: #d8dde6;
-  --sim-text-dim: #8b95a5;
-  --sim-text-dark: #5c6473;
+  /* ── Borders (Subtle, Clean, Human-made) ── */
+  --border:       #293447;
+  --border-light: #37455d;
+  --border-focus: #38bdf8;
 
-  /* Industrial Accent Colors (Matte, High-Contrast, Functional) */
-  --mona-orange: #ff8c00;
-  --mona-orange-dark: #d97706;
-  --sim-green: #22c55e;
-  --sim-red: #ef4444;
-  --sim-yellow: #eab308;
-  --sim-blue: #38bdf8;
-  --sim-cyan: #06b6d4;
+  /* ── Typography Colors ── */
+  --text:         #f8fafc;
+  --text-dim:     #94a3b8;
+  --text-mute:    #64748b;
 
-  --radius-sharp: 2px;
+  /* ── Functional Accents (Subtle & Professional) ── */
+  --accent:       #38bdf8;
+  --accent-glow:  rgba(56, 189, 248, 0.12);
+  --green:        #22c55e;
+  --green-glow:   rgba(34, 197, 94, 0.12);
+  --amber:        #f59e0b;
+  --amber-glow:   rgba(245, 158, 11, 0.12);
+  --red:          #ef4444;
+  --red-glow:     rgba(239, 68, 68, 0.12);
+  --purple:       #a855f7;
+  --orange:       #f97316;
+
+  /* Kept for SVG robot map backward-compatibility */
+  --cyan:         #00d4ff;
+
+  --radius-sm:    4px;
+  --radius:       6px;
+  --radius-lg:    8px;
 }
 
-* {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-}
+* { box-sizing: border-box; margin: 0; padding: 0; }
 
 html, body {
   width: 100%;
   height: 100%;
   overflow: hidden;
-  background-color: var(--sim-bg);
-  color: var(--sim-text);
-  font-family: var(--font-mono);
+  background: var(--bg-base);
+  color: var(--text);
+  font-family: var(--font-ui);
   font-size: 13px;
-  line-height: 1.4;
+  line-height: 1.5;
   -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
 }
 
 #root {
   width: 100vw;
   height: 100vh;
-  margin: 0;
-  padding: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
 
-/* Rugged Technical Scrollbar */
-::-webkit-scrollbar {
-  width: 7px;
-  height: 7px;
-}
-
-::-webkit-scrollbar-track {
-  background: #111316;
-  border-left: 1px solid var(--sim-border);
-}
-
-::-webkit-scrollbar-thumb {
-  background: #3a414e;
-  border-radius: 0;
-  border: 1px solid #1e2229;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: var(--mona-orange);
-}
+/* ── Clean Scrollbars ── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: var(--bg-surface); }
+::-webkit-scrollbar-thumb { background: var(--border-light); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-mute); }

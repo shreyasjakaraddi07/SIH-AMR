@@ -124,8 +124,8 @@ async def trigger_benchmark(request: dict = None):
     scenario = "S1_Normal"
     if request and "scenario" in request:
         scenario = request["scenario"]
-        global LIVE_SCENARIO
-        LIVE_SCENARIO = scenario
+        # NOTE: LIVE_SCENARIO is intentionally NOT changed here.
+        # The live map always runs S1_Normal; benchmark trials are isolated.
         
     tasks = []
     for strategy in ["B0", "B1", "B2", "P1"]:

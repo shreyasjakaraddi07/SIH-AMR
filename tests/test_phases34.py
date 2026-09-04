@@ -42,9 +42,13 @@ def test_scenario_a_intersection():
 #..D..#
 #######
 """
-    sim = Simulator(ascii_map=ascii_map, headless=True)
+    sim = Simulator(ascii_map=ascii_map, headless=True, strategy="P1")
     # Force the two outer robots toward each other's side
     # They will naturally plan crossing paths through the centre
+    from models import Task
+    t1 = Task(task_id='t1', pickup_cell=(5, 1), dropoff_cell=(1, 5), priority=1, status=TaskStatus.QUEUED, created_at=0.0)
+    t2 = Task(task_id='t2', pickup_cell=(1, 1), dropoff_cell=(5, 5), priority=2, status=TaskStatus.QUEUED, created_at=0.0)
+    sim.tasks.extend([t1, t2])
 
     collision_count = 0
     any_yielded = False

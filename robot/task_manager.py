@@ -135,8 +135,13 @@ class LocalTaskManager:
 
         # Check for degraded comms (Phase 4)
         degraded = False
-        for peer_id, last_t in self.last_seen.items():
-            if current_time - last_t > 3.0: # 3 ticks threshold
+        for peer_id, last_t in list(self.last_seen.items()):
+            gap = current_time - last_t
+            if gap > 10.0:  # Beyond heartbeat timeout — peer is offline, not delayed
+                self.last_seen.pop(peer_id, None)
+                self.peer_states.pop(peer_id, None)
+                continue
+            if gap > 3.0:  # 3 ticks threshold
                 degraded = True
                 break
                 
@@ -170,17 +175,31 @@ class LocalTaskManager:
             return False
 
         if self.cbs_mode:
-            # CBS produced a conflict-free path — skip priority negotiation and
-            # reservation-table look-ahead, but still do a physical-block check:
-            # if another robot moved into our target cell earlier in this same
-            # simulation tick (and staked it via the post-move commit), wait 1 tick.
-            # The rolling-horizon CBS replan will resync paths within CBS_REPLAN_INTERVAL.
+            # CBS produced a conflict-free path — skip priority negotiation,
+            # but perform physical-block and proximity checks:
+            physical_block = None
             current_occupant = self.reservation_table.get_claimer(next_cell, current_time)
             if current_occupant and current_occupant != self.state.robot_id:
+                physical_block = current_occupant
+            else:
+                for peer_id, peer_msg in self.peer_states.items():
+                    if peer_id == self.state.robot_id:
+                        continue
+                    if (int(peer_msg.position[0]), int(peer_msg.position[1])) == next_cell:
+                        physical_block = peer_id
+                        break
+
+            if physical_block:
+                if self.event_logger and self.state.status != RobotStatus.WAITING:
+                    self.event_logger.log_conflict(
+                        self.state.robot_id, physical_block,
+                        "OCCUPIED_CELL", "YIELD_WAIT", int(current_time)
+                    )
                 self.state.status = RobotStatus.WAITING
                 self.wait_time += 1.0
-                self.waiting_on = current_occupant
+                self.waiting_on = physical_block
                 return False
+
             if self.state.status == RobotStatus.WAITING:
                 self.state.status = RobotStatus.MOVING
             return True
@@ -333,7 +352,7 @@ class LocalTaskManager:
         if self.state.status == RobotStatus.OFFLINE:
             return
 
-        if self.state.status not in (RobotStatus.DEGRADED, RobotStatus.OFFLINE):
+        if self.state.status != RobotStatus.OFFLINE:
             if self._check_conflicts(current_time):
                 # Move
                 next_cell = self.state.planned_path.pop(0)
@@ -348,7 +367,8 @@ class LocalTaskManager:
                     import math
                     self.state.heading = math.degrees(math.atan2(dy, dx))
                     self.state.position = (float(next_cell[0]), float(next_cell[1]))
-                    self.state.status = RobotStatus.MOVING
+                    if self.state.status != RobotStatus.DEGRADED:
+                        self.state.status = RobotStatus.MOVING
                     # Immediately stake current position in the shared reservation table
                     # so that later robots ticking in the same step see us here and
                     # don't also move into this cell (fixes the simultaneous-entry collision).

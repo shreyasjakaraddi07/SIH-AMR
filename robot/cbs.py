@@ -263,6 +263,8 @@ class CBSPlanner:
         robot_positions: Dict[str, Tuple[float, float]],
         costmap:         Any,
         start_times:     Dict[str, float],
+        event_logger:    Any = None,
+        tick:            int = 0,
     ) -> Dict[str, List[Cell]]:
         """
         Run CBS.
@@ -272,6 +274,8 @@ class CBSPlanner:
             robot_positions : robot_id -> (float x, float y).
             costmap         : GridMap or ObstacleCostmap (idle robots as walls).
             start_times     : robot_id -> start tick.
+            event_logger    : Optional logger to record detected MAPF conflicts.
+            tick            : Current simulation tick.
 
         Returns:
             robot_id -> path (start-inclusive, goal-inclusive).
@@ -301,6 +305,7 @@ class CBSPlanner:
 
         nodes_expanded = 0
         best_solution  = root_sol
+        logged_conflicts = set()
 
         while heap and nodes_expanded < self.MAX_NODES:
             _, _, cs, sol = heapq.heappop(heap)
@@ -310,6 +315,14 @@ class CBSPlanner:
             conflict = detect_first_conflict(sol, start_times, self.PLAN_HORIZON)
             if conflict is None:
                 return sol   # ✓ collision-free
+
+            # Log the detected conflict so telemetry / event log captures it
+            if event_logger:
+                pair = tuple(sorted([conflict[1], conflict[2]]))
+                if pair not in logged_conflicts:
+                    logged_conflicts.add(pair)
+                    c_type = "VERTEX_CONFLICT" if conflict[0] == "vertex" else "EDGE_SWAP"
+                    event_logger.log_conflict(conflict[1], conflict[2], c_type, "CBS_RESOLVED", tick)
 
             if conflict[0] == "vertex":
                 _, ra, rb, cell, t = conflict

@@ -158,6 +158,9 @@ class Simulator:
             manager.state.status = RobotStatus.OFFLINE
             manager.reservation_table.expire(robot_id)
             self._orphan_task(manager)
+            for m in self.robot_managers:
+                m.last_seen.pop(robot_id, None)
+                m.peer_states.pop(robot_id, None)
 
     # -------------------------------------------------------------------------
     # Internal helpers
@@ -180,6 +183,9 @@ class Simulator:
                 m.state.status = RobotStatus.OFFLINE
                 m.reservation_table.expire(m.state.robot_id)
                 self._orphan_task(m)
+                for peer in self.robot_managers:
+                    peer.last_seen.pop(m.state.robot_id, None)
+                    peer.peer_states.pop(m.state.robot_id, None)
 
     def _run_deadlock_detection(self):
         wait_graph: Dict[str, str] = {}
@@ -302,7 +308,10 @@ class Simulator:
             ObstacleCostmap(self.grid_map, idle_cells) if idle_cells else self.grid_map
         )
 
-        paths = self.cbs_planner.plan(goals, positions, planning_map, starts)
+        paths = self.cbs_planner.plan(
+            goals, positions, planning_map, starts,
+            event_logger=self.event_log, tick=self.tick_count
+        )
 
         injected = 0
         for m in self.robot_managers:
