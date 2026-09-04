@@ -104,7 +104,7 @@ class Simulator:
                 task_priority=0,
                 status=RobotStatus.IDLE
             )
-            manager = LocalTaskManager(state, self.planner, self.comms, self.grid_map, strategy=self.strategy)
+            manager = LocalTaskManager(state, self.planner, self.comms, self.grid_map, strategy=self.strategy, event_logger=self.event_log)
             
             # OVERRIDE the local table with the global one so robots instantly see each other's paths
             # during sequential allocation, solving the simultaneous-planning collision bug.
@@ -201,6 +201,7 @@ class Simulator:
             m.force_reroute()
             self.metric_values[metrics.REPLAN_COUNT] += 1
             self.event_log.log_deadlock_break(cycle, breaker, self.tick_count)
+            self.event_log.log_conflict(breaker, cycle[0] if cycle else "CYCLE", "DEADLOCK_BREAK", "REROUTE", self.tick_count)
 
     def _check_collisions(self):
         """Count vertex collisions for metrics (robots should not share cells after Phase 3)."""
@@ -295,6 +296,15 @@ class Simulator:
             self.telemetry_bus.publish(snapshot)
 
     def _build_snapshot(self) -> dict:
+        metrics_dict = dict(self.metric_values)
+        metrics_dict.update({
+            "makespan": self.metric_values.get(metrics.MAKESPAN, 0.0),
+            "throughput": self.metric_values.get(metrics.THROUGHPUT, 0.0),
+            "collision_count": self.metric_values.get(metrics.COLLISION_COUNT, 0),
+            "deadlock_count": self.metric_values.get(metrics.DEADLOCK_COUNT, 0),
+            "replan_count": self.metric_values.get(metrics.REPLAN_COUNT, 0),
+            "waiting_time": self.metric_values.get(metrics.WAITING_TIME, 0.0),
+        })
         return {
             "tick": self.tick_count,
             "robots": [
@@ -308,6 +318,9 @@ class Simulator:
                     "planned_path": m.state.planned_path,
                     "communication_quality": m.state.communication_quality,
                     "localization_confidence": m.state.localization_confidence,
+                    "heading": getattr(m.state, "heading", 0.0),
+                    "has_cargo": m.current_task is not None and m.current_task.status == TaskStatus.IN_PROGRESS,
+                    "target_cell": m.target_cell,
                 }
                 for m in self.robot_managers
             ],
@@ -324,7 +337,7 @@ class Simulator:
             ],
             "conflicts": self.event_log.conflict_events[-20:],
             "deadlocks": self.event_log.deadlock_events[-10:],
-            "metrics": dict(self.metric_values),
+            "metrics": metrics_dict,
             "grid": self.grid_map.grid if self.grid_map else [],
         }
 

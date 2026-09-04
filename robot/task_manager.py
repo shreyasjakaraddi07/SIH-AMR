@@ -4,12 +4,13 @@ from interfaces import Planner, CommsChannel
 from robot.coordination import ReservationTable, PriorityCalculator, check_vertex_conflict, check_edge_swap
 
 class LocalTaskManager:
-    def __init__(self, robot_state: RobotState, planner: Planner, comms: CommsChannel, costmap: Any, strategy: str = "P1"):
+    def __init__(self, robot_state: RobotState, planner: Planner, comms: CommsChannel, costmap: Any, strategy: str = "P1", event_logger: Any = None):
         self.state = robot_state
         self.planner = planner
         self.comms = comms
         self.costmap = costmap
         self.strategy = strategy
+        self.event_logger = event_logger
         self.current_task: Optional[Task] = None
         self.seq = 0
         self.target_cell: Optional[tuple[int, int]] = None
@@ -53,7 +54,8 @@ class LocalTaskManager:
                 self.reservation_table.commit(self.state.robot_id, path, self.state.timestamp + 1)
         else:
             self.state.planned_path = []
-            self.reservation_table.expire(self.state.robot_id)
+            curr_pos = (int(self.state.position[0]), int(self.state.position[1]))
+            self.reservation_table.commit(self.state.robot_id, [curr_pos] * 200, self.state.timestamp)
 
     def _update_peer_reservations(self, current_time: float):
         """Update local reservation table based on received intents."""
@@ -115,6 +117,8 @@ class LocalTaskManager:
                 if current_time - self.last_seen.get(peer_id, 0) < 3.0:
                     px, py = msg.position
                     if int(px) == next_cell[0] and int(py) == next_cell[1]:
+                        if self.event_logger and self.state.status != RobotStatus.WAITING:
+                            self.event_logger.log_conflict(self.state.robot_id, peer_id, "PROXIMITY_STOP", "WAIT", int(current_time))
                         self.state.status = RobotStatus.WAITING
                         self.wait_time += 1.0
                         return False
@@ -123,9 +127,24 @@ class LocalTaskManager:
             return True
 
         # Phase 3 Conflict Detection (P1 Strategy)
+        # Check if any peer is physically stationary in the target cell
+        for peer_id, peer_msg in self.peer_states.items():
+            if peer_id == self.state.robot_id:
+                continue
+            if (int(peer_msg.position[0]), int(peer_msg.position[1])) == next_cell:
+                if peer_msg.intent == Intent.WAIT or not peer_msg.planned_path or peer_msg.velocity == 0:
+                    if self.event_logger and self.state.status != RobotStatus.WAITING:
+                        self.event_logger.log_conflict(self.state.robot_id, peer_id, "OCCUPIED_CELL", "WAIT", int(current_time))
+                    self.state.status = RobotStatus.WAITING
+                    self.wait_time += 1.0
+                    self.waiting_on = peer_id
+                    return False
+
         conflicting_robot = check_vertex_conflict(self.reservation_table, self.state.robot_id, next_cell, current_time + 1)
+        conflict_type = "VERTEX_CONFLICT"
         if not conflicting_robot:
             conflicting_robot = check_edge_swap(self.reservation_table, self.state.robot_id, current_cell, next_cell, current_time)
+            conflict_type = "EDGE_SWAP"
             
         if conflicting_robot:
             self.waiting_on = conflicting_robot
@@ -138,6 +157,8 @@ class LocalTaskManager:
                 
                 if my_pri < peer_pri:
                     # I yield
+                    if self.event_logger and self.state.status != RobotStatus.WAITING:
+                        self.event_logger.log_conflict(self.state.robot_id, conflicting_robot, conflict_type, "YIELD", int(current_time))
                     self.state.status = RobotStatus.WAITING
                     self.wait_time += 1.0
                     return False
@@ -148,13 +169,19 @@ class LocalTaskManager:
                     if int(px) == next_cell[0] and int(py) == next_cell[1]:
                         if peer_msg.intent == Intent.WAIT or not peer_msg.planned_path:
                             # We must wait, it can't get out of our way!
+                            if self.event_logger and self.state.status != RobotStatus.WAITING:
+                                self.event_logger.log_conflict(self.state.robot_id, conflicting_robot, conflict_type, "WAIT_OCCUPIED", int(current_time))
                             self.state.status = RobotStatus.WAITING
                             self.wait_time += 1.0
                             return False
                     # Otherwise proceed (other should yield)
+                    if self.event_logger:
+                        self.event_logger.log_conflict(self.state.robot_id, conflicting_robot, conflict_type, "PRIORITY_PASS", int(current_time))
                     pass
             else:
                 # Peer unknown, play safe
+                if self.event_logger and self.state.status != RobotStatus.WAITING:
+                    self.event_logger.log_conflict(self.state.robot_id, conflicting_robot, conflict_type, "CAUTION_WAIT", int(current_time))
                 self.state.status = RobotStatus.WAITING
                 self.wait_time += 1.0
                 return False
@@ -182,7 +209,18 @@ class LocalTaskManager:
             if self._check_conflicts(current_time):
                 # Move
                 next_cell = self.state.planned_path.pop(0)
-                self.state.position = (float(next_cell[0]), float(next_cell[1]))
+                curr_int = (int(self.state.position[0]), int(self.state.position[1]))
+                target_int = (int(next_cell[0]), int(next_cell[1]))
+                if target_int == curr_int:
+                    self.state.status = RobotStatus.WAITING
+                    self.wait_time += 1.0
+                else:
+                    dx = target_int[0] - curr_int[0]
+                    dy = target_int[1] - curr_int[1]
+                    import math
+                    self.state.heading = math.degrees(math.atan2(dy, dx))
+                    self.state.position = (float(next_cell[0]), float(next_cell[1]))
+                    self.state.status = RobotStatus.MOVING
             elif not self.state.planned_path and self.target_cell:
                 # Reached target
                 self._handle_arrival()
@@ -238,3 +276,4 @@ class LocalTaskManager:
             self.state.current_task_id = None
             self.current_task = None
             self.target_cell = None
+            self.reservation_table.commit(self.state.robot_id, [current_int] * 200, self.state.timestamp)
