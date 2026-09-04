@@ -219,6 +219,33 @@
   text-transform: uppercase;
 }
 
+.map-scenario-select {
+  background: #0f172a;
+  border: 1px solid #0284c7;
+  color: #38bdf8;
+  font-size: 0.68rem;
+  font-family: var(--font-mono);
+  padding: 0.18rem 0.55rem;
+  border-radius: var(--radius-sm);
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  cursor: pointer;
+  outline: none;
+  transition: all 0.15s;
+}
+
+.map-scenario-select:hover,
+.map-scenario-select:focus {
+  background: #1e293b;
+  border-color: #38bdf8;
+  color: #fff;
+}
+
+.map-scenario-select option {
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
 .map-toggles {
   display: flex;
   align-items: center;

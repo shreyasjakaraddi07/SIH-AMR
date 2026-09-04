@@ -23,6 +23,17 @@ export default function App() {
     } catch (e) { console.error('Speed error:', e); }
   };
 
+  const changeScenario = async (scen) => {
+    setSelectedScenario(scen);
+    try {
+      await fetch('http://localhost:8000/api/scenario', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scenario: scen })
+      });
+    } catch (e) { console.error('Scenario error:', e); }
+  };
+
   const connectWs = () => {
     if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
       return;
@@ -58,7 +69,11 @@ export default function App() {
       ws.onmessage = (e) => {
         if (wsRef.current === ws) {
           try {
-            setData(JSON.parse(e.data));
+            const snap = JSON.parse(e.data);
+            setData(snap);
+            if (snap.scenario) {
+              setSelectedScenario(snap.scenario);
+            }
           } catch (err) {
             console.error('Snapshot parse error:', err);
           }
@@ -136,7 +151,20 @@ export default function App() {
           <div className="map-control-bar">
             <div className="map-heading">
               <span>Live Warehouse Map</span>
-              <span className="map-heading-badge">S1 · Normal</span>
+              <select
+                className="map-scenario-select"
+                id="map-scenario-select"
+                value={selectedScenario}
+                onChange={e => changeScenario(e.target.value)}
+                title="Select simulation mode / stress test map"
+              >
+                <option value="S1_Normal">S1 · Normal Warehouse</option>
+                <option value="S2_Crossing">S2 · Crossing Traffic</option>
+                <option value="S3_Narrow">S3 · Narrow Aisle</option>
+                <option value="S4_Blocked">S4 · Blocked Aisle</option>
+                <option value="S5_Failure">S5 · Robot Failure</option>
+                <option value="S6_CommDelay">S6 · Comm Delay</option>
+              </select>
             </div>
 
             <div className="map-toggles">
@@ -183,7 +211,7 @@ export default function App() {
           <TasksPanel tasks={safeData.tasks} />
           <RobotsPanel robots={safeData.robots} activeRobotId={activeRobotId} setActiveRobotId={setActiveRobotId} />
           <ConflictsPanel conflicts={safeData.conflicts} />
-          <BenchmarkPanel scenario={selectedScenario} setScenario={setSelectedScenario} />
+          <BenchmarkPanel scenario={selectedScenario} setScenario={changeScenario} />
         </aside>
       </main>
     </div>
@@ -664,7 +692,7 @@ function BenchmarkPanel({ scenario, setScenario }) {
               ))}
             </tbody>
           </table>
-          <div className="bench-note">Universal S1 live map · Independent benchmark trials</div>
+          <div className="bench-note">Live Map Synced · Independent benchmark trials</div>
         </>
       )}
     </div>

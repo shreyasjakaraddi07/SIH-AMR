@@ -447,6 +447,7 @@ class Simulator:
             "deadlocks": self.event_log.deadlock_events[-10:],
             "metrics": metrics_dict,
             "grid": self.grid_map.grid if self.grid_map else [],
+            "scenario": getattr(self, "scenario_name", "S1_Normal"),
         }
 
     # -------------------------------------------------------------------------

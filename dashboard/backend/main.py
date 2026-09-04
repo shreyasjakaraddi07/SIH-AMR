@@ -58,20 +58,33 @@ def live_simulation_loop(bus):
     while RUNNING:
         current_scen = LIVE_SCENARIO
         sim = Simulator(ascii_map=SCENARIOS[current_scen], headless=True, telemetry_bus=bus, strategy="P1")
+        sim.scenario_name = current_scen
         
-        for tick in range(300):
+        # S6 CommDelay: patch comms so robot-0 drops broadcasts
+        if current_scen == "S6_CommDelay":
+            original_send = sim.comms.send
+            def patched_send(msg):
+                if msg.robot_id != "robot-0":
+                    original_send(msg)
+            sim.comms.send = patched_send
+        
+        switched = False
+        for tick in range(500):
             if not RUNNING or current_scen != LIVE_SCENARIO: 
+                switched = True
                 break
                 
-            # Apply scenario-specific events
-            if current_scen == "S4_Blocked" and tick == 50:
+            # Apply scenario-specific dynamic events
+            if current_scen == "S4_Blocked" and tick == 40:
                 sim.block_cell(5, 2)
-            elif current_scen == "S5_Failure" and tick == 80:
+            elif current_scen == "S5_Failure" and tick == 50:
                 sim.kill_robot("robot-0")
                 
             sim.tick()
             time.sleep(SIM_TICK_RATE)  # Smooth, observable pace
-        time.sleep(2)
+            
+        if not switched and RUNNING:
+            time.sleep(1)
 
 
 @app.on_event("startup")
@@ -81,6 +94,23 @@ async def _on_startup():
     asyncio.create_task(_drain_bus())
     # Start the continuous live simulation loop for the UI map
     threading.Thread(target=live_simulation_loop, args=(_bus,), daemon=True).start()
+
+
+@app.post("/api/scenario")
+async def set_scenario(request: dict):
+    """Switches the live simulation scenario map."""
+    global LIVE_SCENARIO
+    if request and "scenario" in request:
+        scen = request["scenario"]
+        if scen in SCENARIOS:
+            LIVE_SCENARIO = scen
+            return {"status": "ok", "scenario": LIVE_SCENARIO}
+    return {"status": "error", "message": "Invalid scenario"}
+
+
+@app.get("/api/scenario")
+async def get_scenario():
+    return {"scenario": LIVE_SCENARIO}
 
 
 @app.post("/api/speed")
@@ -124,8 +154,9 @@ async def trigger_benchmark(request: dict = None):
     scenario = "S1_Normal"
     if request and "scenario" in request:
         scenario = request["scenario"]
-        # NOTE: LIVE_SCENARIO is intentionally NOT changed here.
-        # The live map always runs S1_Normal; benchmark trials are isolated.
+        if scenario in SCENARIOS:
+            global LIVE_SCENARIO
+            LIVE_SCENARIO = scenario  # Live map dynamically reflects the benchmark scenario
         
     tasks = []
     for strategy in ["B0", "B1", "B2", "P1"]:
