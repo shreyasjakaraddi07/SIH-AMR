@@ -125,11 +125,9 @@ The security layer includes validation concepts such as:
 A web dashboard provides visualization and monitoring of the simulation
 and experiment results.
 
-### 8. Installation
+### 8. Installation & Setup
 
-# Installation & Setup
-
-## Prerequisites
+#### Prerequisites
 
 Ensure you have the following installed on your system:
 
@@ -139,7 +137,7 @@ Ensure you have the following installed on your system:
 
 ---
 
-## 1. Clone the Repository
+#### 1. Clone the Repository
 
 ```bash
 git clone https://github.com/shreyasjakaraddi07/SIH-AMR.git
@@ -148,9 +146,9 @@ cd SIH-AMR
 
 ---
 
-## 2. Backend Setup (Simulation & Telemetry API)
+#### 2. Backend Setup (Simulation & Telemetry API)
 
-### 1. Create and activate a virtual environment
+##### 1. Create and activate a virtual environment
 
 **Windows (PowerShell):**
 
@@ -166,7 +164,7 @@ python3 -m venv venv
 source venv/bin/activate
 ```
 
-### 2. Install Python dependencies
+##### 2. Install Python dependencies
 
 ```bash
 pip install fastapi uvicorn websockets scipy numpy pandas matplotlib onnxruntime pytest
@@ -174,7 +172,7 @@ pip install fastapi uvicorn websockets scipy numpy pandas matplotlib onnxruntime
 
 *Optional: Install **`pygame`** if you want local non-headless window rendering.*
 
-### 3. Start the FastAPI Telemetry Server
+##### 3. Start the FastAPI Telemetry Server
 
 ```bash
 uvicorn dashboard.backend.main:app --reload --port 8000
@@ -184,27 +182,27 @@ uvicorn dashboard.backend.main:app --reload --port 8000
 
 ---
 
-## 3. Frontend Setup (Live Dashboard & Map View)
+#### 3. Frontend Setup (Live Dashboard & Map View)
 
-### 1. Navigate to the frontend directory
+##### 1. Navigate to the frontend directory
 
 ```bash
 cd dashboard/frontend
 ```
 
-### 2. Install Node.js dependencies
+##### 2. Install Node.js dependencies
 
 ```bash
 npm install
 ```
 
-### 3. Start the Vite development server
+##### 3. Start the Vite development server
 
 ```bash
 npm run dev
 ```
 
-### 4. Open in your browser
+##### 4. Open in your browser
 
 Navigate to **`http://localhost:5173`** to access the live warehouse dashboard.
 
