@@ -1,54 +1,147 @@
-# Decentralized Multi-AMR Warehouse Coordination Simulator
+# Decentralized Multi-AMR Warehouse Coordination
 
-## SIH 2026 Problem Statement 26123
+### SIH 2026 — Problem Statement 26123
 
-This project provides the foundational architecture for a decentralized multi-AMR (autonomous mobile robot) warehouse coordination simulator.
+An edge-oriented simulation and coordination framework for multiple
+Autonomous Mobile Robots (AMRs) operating in a shared warehouse environment.
 
-### Architecture Freeze Checkpoint (Phase 0)
+The system focuses on three core challenges:
 
-**Do not change these signatures after Phase 0 without team agreement — this is the architecture freeze checkpoint.**
+- Decentralized inter-robot coordination
+- Conflict resolution and collision avoidance
+- Dynamic task allocation and recovery
 
-The architecture is defined by frozen interfaces ensuring pluggability of components.
+The project is designed around local robot decision-making, while the
+dashboard is used for monitoring and visualization.
 
-#### Frozen Datamodels (`models.py`)
+---
 
-- `RobotState`: Full observable state vector for a single robot.
-- `IntentMessage`: Lightweight broadcast message used for peer-to-peer coordination.
-- `Task`: A single pick-and-place warehouse task.
+## Problem
 
-#### Frozen Pluggable Interfaces (`interfaces.py`)
+In a smart warehouse, multiple AMRs may need to use the same aisles,
+intersections, and choke points at the same time.
 
-- `Planner`: Defines `plan(start, goal, costmap) -> path`
-- `TaskAllocator`: Defines `allocate(robots, tasks) -> assignment dict`
-- `ConflictResolver`: Defines `check_and_resolve(reservations, proposed_path) -> resolution`
-- `CommsChannel`: Defines `send(message)` and `receive() -> list[messages]`
-- `SecurityValidator`: Defines `validate(message) -> accept/quarantine/reject`
+A centralized stop-and-wait approach can cause:
 
-### Project Structure
+- unnecessary waiting
+- congestion at narrow intersections
+- deadlocks
+- poor task throughput
+- difficulty recovering when an aisle or robot becomes unavailable
 
-- `/sim` - simulation engine
-- `/robot` - per-robot local modules (state, planner, coordination, security, task manager)
-- `/allocator` - task allocation layer
-- `/comms` - communication abstraction
-- `/dashboard` - backend + frontend
-- `/experiments` - benchmark runner
-- `/tests` - test suite
+This project explores a decentralized approach in which each robot maintains
+its own state, plans its movement, communicates intent with peers, and adapts
+when the environment changes.
 
-### Metrics (`metrics.py`)
+---
 
-Predefined metrics matching reference doc Section 16.2.
+## Proposed Approach
 
-### Config (`config.py`)
+The system follows the pipeline:
 
-Warehouse grid map format and loader.
+**Task → Assignment → Path Planning → Reservation → Coordination → Execution → Replanning**
 
-### Start
+Each robot maintains local information such as:
 
-`This starts the data API that the dashboard talks to`
-`python -m uvicorn dashboard.backend.main:app --reload`
+- current position and velocity
+- assigned task
+- planned path
+- reservations
+- peer intent
+- communication quality
+- battery/state information
 
-`Navigate to the frontend folder`
-`cd d:\sih26\SIH-AMR\dashboard\frontend`
+When a conflict or failure is detected, the robot can wait, yield, reroute,
+or enter a degraded operating mode depending on the situation.
 
-`Start the visual dashboard`
-`npm run dev`
+---
+
+## Key Components
+
+### 1. Path Planning
+
+The simulator uses grid-based path planning with A* and a space-time
+representation for considering reservations and movement over time.
+
+### 2. Multi-Robot Coordination
+
+Robots exchange intent/state information and use reservations to reduce
+conflicts at shared cells and intersections.
+
+The coordination layer includes:
+
+- vertex conflict detection
+- edge-swap conflict detection
+- intersection checks
+- priority handling
+- deadlock detection
+- replanning
+
+### 3. Dynamic Task Allocation
+
+Tasks are assigned to available robots using a Hungarian-algorithm-based
+allocator.
+
+The system also supports task recovery when a robot becomes unavailable.
+
+### 4. Failure Handling
+
+The simulator includes scenarios for:
+
+- blocked aisles
+- robot failure
+- communication degradation/loss
+- task reassignment
+- replanning
+
+### 5. Edge Decision Layer
+
+A local policy layer is provided for robot-side decisions such as:
+
+- `CONTINUE`
+- `YIELD`
+- `WAIT`
+- `REROUTE`
+- `DEGRADED_MODE`
+
+A deterministic safety policy acts as the fallback/guard layer, while an
+ONNX-based policy can be evaluated locally.
+
+### 6. Communication & Security
+
+The communication layer provides a pluggable message-channel abstraction
+for peer coordination.
+
+The security layer includes validation concepts such as:
+
+- robot authentication
+- message integrity
+- sequence checking
+- freshness checking
+- physical plausibility checks
+
+### 7. Dashboard
+
+A web dashboard provides visualization and monitoring of the simulation
+and experiment results.
+
+---
+
+## Repository Structure
+
+```text
+SIH-AMR/
+│
+├── allocator/          # Task allocation and task generation
+├── comms/              # Inter-robot communication abstraction
+├── dashboard/          # Backend API and web dashboard
+├── experiments/        # Benchmarking and experiment runners
+├── robot/              # Robot-local planning and coordination
+├── sim/                # Multi-AMR simulation engine
+├── tests/              # Automated tests
+│
+├── config.py           # Warehouse/grid configuration
+├── interfaces.py       # Pluggable system interfaces
+├── metrics.py          # Experiment metrics
+├── models.py           # Shared data models
+└── README.md
